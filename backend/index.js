@@ -46,6 +46,22 @@ app.get('/api/auth/callback', async (req, res) => {
     // tokenResp typically contains { access_token, scope }
     shops[shop] = { token: tokenResp.access_token, scope: tokenResp.scope, installedAt: Date.now() };
     console.log(`Installed on ${shop}`, { scope: tokenResp.scope });
+    // After OAuth install, call Shopify Admin API to create ScriptTag
+    await axios.post(
+      `https://${shop}/admin/api/2025-07/script_tags.json`,
+      {
+        script_tag: {
+          event: "onload",
+          src: "https://your-frontend-app.com/chat-widget-inject.js"
+        }
+      },
+      {
+        headers: {
+          'X-Shopify-Access-Token': accessToken,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
 
     // For a real app, redirect to the embedded admin UI. For now, show success.
     return res.send(`App installed on ${shop}. You can close this window.`);
