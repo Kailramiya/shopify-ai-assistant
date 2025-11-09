@@ -311,12 +311,16 @@ app.post("/api/ask", async (req, res) => {
     let answer = null;
 
     if (provider === 'gemini' || provider === 'google') {
-      // Use Google Generative Language API (Gemini). This example uses the text generation
-      // endpoint. The api key can be provided in the request (apiKey) or via GOOGLE_API_KEY env.
-  const model = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
+      // Use Google Generative Language API (Gemini).
+      // Allow per-request override: req.body.model or req.query.model can be provided.
+      // Fallback to server env GEMINI_MODEL or GOOGLE_MODEL, then to text-bison-001.
+      const requestedModel = req.body?.model || req.query?.model || null;
+      const modelEnv = requestedModel || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
+      // Normalize to a models/<id> path for the REST endpoint
+      const modelPath = String(modelEnv).startsWith('models/') ? modelEnv : `models/${modelEnv}`;
       try {
         const gResp = await axios.post(
-          `https://generativelanguage.googleapis.com/v1/models/${model}:generate?key=${encodeURIComponent(key)}`,
+          `https://generativelanguage.googleapis.com/v1/${modelPath}:generate?key=${encodeURIComponent(key)}`,
           {
             prompt: { text: `${systemPrompt}\n\n${userPrompt}` },
             temperature: 0.2,
@@ -330,8 +334,13 @@ app.post("/api/ask", async (req, res) => {
         // Provide richer error info for debugging (status + body when available)
         const status = gErr?.response?.status || null;
         const body = gErr?.response?.data || gErr.message || String(gErr);
-        console.error('gemini error', { status, body });
-        return res.status(500).json({ error: 'Gemini API error', status, body });
+        console.error('gemini error', { status, body, modelEnv, modelPath });
+        const suggestion = status === 404
+          ? `Model not found. Confirm the model name (${modelEnv}) is available to your Google Cloud project and that the Generative API is enabled. Try setting GEMINI_MODEL to a valid model id (e.g. text-bison-001) or verify your project/key permissions.`
+          : (status === 401 || status === 403)
+            ? `Authentication/permission error. Ensure the API key is valid, not restricted, and the Generative Models API is enabled for the project.`
+            : `Unexpected error from Gemini. See 'body' for details.`;
+        return res.status(500).json({ error: 'Gemini API error', status, body, modelEnv, modelPath, suggestion });
       }
     } else {
       // Call OpenAI Chat Completions
