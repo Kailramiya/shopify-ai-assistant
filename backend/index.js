@@ -327,8 +327,11 @@ app.post("/api/ask", async (req, res) => {
         // response shape can vary; try several properties
         answer = gResp?.data?.candidates?.[0]?.output || gResp?.data?.candidates?.[0]?.content || gResp?.data?.output || null;
       } catch (gErr) {
-        console.error('gemini error', gErr?.response?.data || gErr.message || gErr);
-        return res.status(500).json({ error: 'Gemini API error', detail: gErr?.response?.data || gErr.message });
+        // Provide richer error info for debugging (status + body when available)
+        const status = gErr?.response?.status || null;
+        const body = gErr?.response?.data || gErr.message || String(gErr);
+        console.error('gemini error', { status, body });
+        return res.status(500).json({ error: 'Gemini API error', status, body });
       }
     } else {
       // Call OpenAI Chat Completions
@@ -358,3 +361,15 @@ app.post("/api/ask", async (req, res) => {
 // Server listen
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
+
+// Debug endpoint to inspect which provider/env is configured (safe: does not return API keys)
+app.get('/api/debug-provider', (req, res) => {
+  try {
+    const hasGemini = !!process.env.GEMINI_API_KEY;
+    const hasOpenAI = !!process.env.OPENAI_API_KEY;
+    const geminiModel = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || null;
+    return res.json({ providerDefault: process.env.AI_PROVIDER || (hasGemini ? 'gemini' : (hasOpenAI ? 'openai' : null)), hasGemini, hasOpenAI, geminiModel });
+  } catch (e) {
+    return res.status(500).json({ error: 'debug error', detail: e.message });
+  }
+});
