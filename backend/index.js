@@ -315,9 +315,11 @@ app.post("/api/ask", async (req, res) => {
       // Allow per-request override: req.body.model or req.query.model can be provided.
       // Fallback to server env GEMINI_MODEL or GOOGLE_MODEL, then to text-bison-001.
       const requestedModel = req.body?.model || req.query?.model || null;
-      const modelEnv = requestedModel || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
-      // Normalize to a models/<id> path for the REST endpoint
-      const modelPath = String(modelEnv).startsWith('models/') ? modelEnv : `models/${modelEnv}`;
+  const modelEnvRaw = requestedModel || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
+  // Normalize and lowercase to avoid accidental case mismatches (model ids are lowercase)
+  const modelEnv = String(modelEnvRaw).toLowerCase();
+  // Normalize to a models/<id> path for the REST endpoint
+  const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
       try {
         const gResp = await axios.post(
           `https://generativelanguage.googleapis.com/v1/${modelPath}:generate?key=${encodeURIComponent(key)}`,
@@ -359,7 +361,7 @@ app.post("/api/ask", async (req, res) => {
 
       answer = resp?.data?.choices?.[0]?.message?.content || null;
     }
-    if (!answer) return res.status(500).json({ error: 'No answer from AI provider', raw: resp.data });
+  if (!answer) return res.status(500).json({ error: 'No answer from AI provider', raw: (typeof resp !== 'undefined' ? resp.data : null) });
     return res.json({ answer });
   } catch (err) {
     console.error('ask error', err?.response?.data || err.message || err);
