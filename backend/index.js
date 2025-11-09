@@ -13,7 +13,27 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+// Dynamic CORS: allow requests from known shop origins or configured ALLOWED_ORIGINS
+const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean) : null;
+app.use(cors({
+  origin: function(origin, callback) {
+    // allow non-browser clients (curl) with no origin
+    if (!origin) return callback(null, true);
+    try {
+      const originHost = new URL(origin).host;
+      // allow explicit allowlist
+      if (allowedOrigins && allowedOrigins.includes(origin)) return callback(null, true);
+      if (allowedOrigins && allowedOrigins.includes(originHost)) return callback(null, true);
+      // allow if this origin maps to a stored shop
+      try {
+        const shopData = storage.readShopData(originHost);
+        if (shopData) return callback(null, true);
+      } catch (e) { /* ignore */ }
+    } catch (e) { /* invalid origin, fallthrough */ }
+    return callback(new Error('CORS blocked for origin: ' + origin));
+  },
+  credentials: true
+}));
 
 
 const shops = {};
@@ -166,8 +186,41 @@ app.post('/api/scrape-store', async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+// Widget config endpoint - returns whether the store has stored aggregated content
+app.get('/api/widget-config', (req, res) => {
+  try {
+    // determine shop from header or origin
+    const shop = req.get('X-Shop-Domain') || (req.get('Origin') ? new URL(req.get('Origin')).host : null);
+    let cfg = { apiBase: process.env.PUBLIC_APP_URL || '', useStored: false };
+    if (shop) {
+      const data = storage.readShopData(shop);
+      if (data && data.aggregated && data.aggregated.length > 100) cfg.useStored = true;
+    }
+    return res.json(cfg);
+  } catch (e) {
+    console.error('widget-config error', e);
+    return res.json({ apiBase: process.env.PUBLIC_APP_URL || '', useStored: false });
+  }
+});
 
-  // Endpoint to fetch stored data for a shop
+// Serve widget asset in dev if available (convenience)
+const fs = require('fs');
+const path = require('path');
+app.get('/widget/chat-widget.js', (req, res) => {
+  // search likely paths relative to backend folder
+  const candidates = [
+    path.join(__dirname, '..', 'ai-assistant-1', 'extensions', 'chat-widget', 'assets', 'chat-widget.js'),
+    path.join(__dirname, '..', 'extensions', 'chat-widget', 'assets', 'chat-widget.js')
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      return res.type('application/javascript').send(fs.readFileSync(p, 'utf8'));
+    }
+  }
+  return res.status(404).send('Not found');
+});
+
+// Endpoint to fetch stored data for a shop
   app.get('/api/store-data', (req, res) => {
     const shop = req.query.shop;
     if (!shop) return res.status(400).json({ error: 'shop query param required' });
@@ -216,11 +269,27 @@ app.post("/api/ask", async (req, res) => {
 
     if (!question || typeof question !== 'string') return res.status(400).json({ error: 'question is required' });
 
-    // If a URL is provided, scrape it to get context; otherwise no context
+    // If useStored=true, prefer server-side persisted aggregated content for the shop
+    const useStored = req.body.useStored === true || req.get('X-Use-Stored') === '1';
     let contextText = '';
-    if (url) {
-      const scraped = await scraper.scrape(url, { maxLength: 4000 });
-      if (scraped && scraped.text) contextText = scraped.text;
+    if (useStored) {
+      try {
+        const shopHeader = req.get('X-Shop-Domain');
+        const originHost = req.get('Origin') ? new URL(req.get('Origin')).host : null;
+        const urlHost = url ? (new URL(url).host) : null;
+        const shop = shopHeader || urlHost || originHost;
+        if (shop) {
+          const data = storage.readShopData(shop);
+          if (data && data.aggregated) contextText = data.aggregated;
+        }
+      } catch (e) { console.error('useStored fetch error', e); }
+    }
+    // Fallback to live scrape when not using stored context
+    if (!contextText && url) {
+      try {
+        const scraped = await scraper.scrape(url, { maxLength: 4000, renderFallback: true });
+        if (scraped && scraped.text) contextText = scraped.text;
+      } catch (e) { console.error('live scrape error', e); }
     }
 
   // Determine provider and API key. Request can pass { apiKey, provider }.
