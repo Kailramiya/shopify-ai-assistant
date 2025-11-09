@@ -11,6 +11,10 @@ const indexer = require('./indexer');
 // removed openroute integration per request (we'll use Gemini for LLM)
 dotenv.config();
 
+// Optional Google auth library for service-account OAuth
+let GoogleAuth = null;
+try { GoogleAuth = require('google-auth-library').GoogleAuth; } catch (e) { /* optional */ }
+
 const app = express();
 app.use(express.json());
 // Dynamic CORS: allow requests from known shop origins or configured ALLOWED_ORIGINS
@@ -320,27 +324,52 @@ app.post("/api/ask", async (req, res) => {
   const modelEnv = String(modelEnvRaw).toLowerCase();
   // Normalize to a models/<id> path for the REST endpoint
   const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
+      // Helper: obtain access token from a provided service account JSON or key file
+      async function getServiceAccountAccessToken() {
+        try {
+          if (!GoogleAuth) return null;
+          const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
+          if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+            const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+            const auth = new GoogleAuth({ credentials: creds, scopes });
+            const client = await auth.getClient();
+            const at = await client.getAccessToken();
+            return (typeof at === 'string') ? at : (at?.token || null);
+          }
+          if (process.env.GOOGLE_SERVICE_ACCOUNT_PATH) {
+            const auth = new GoogleAuth({ keyFilename: process.env.GOOGLE_SERVICE_ACCOUNT_PATH, scopes });
+            const client = await auth.getClient();
+            const at = await client.getAccessToken();
+            return (typeof at === 'string') ? at : (at?.token || null);
+          }
+          return null;
+        } catch (e) {
+          console.error('service-account token error', e?.response?.data || e.message || e);
+          return null;
+        }
+      }
+
       try {
-        const gResp = await axios.post(
-          `https://generativelanguage.googleapis.com/v1/${modelPath}:generate?key=${encodeURIComponent(key)}`,
-          {
-            prompt: { text: `${systemPrompt}\n\n${userPrompt}` },
-            temperature: 0.2,
-            maxOutputTokens: 512
-          },
-          { timeout: 20000 }
-        );
+        const urlBase = `https://generativelanguage.googleapis.com/v1/${modelPath}:generate`;
+        let resp;
+        // Try service-account OAuth first if configured
+        const saToken = await getServiceAccountAccessToken();
+        if (saToken) {
+          resp = await axios.post(urlBase, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { headers: { Authorization: `Bearer ${saToken}`, 'Content-Type': 'application/json' }, timeout: 20000 });
+        } else {
+          // Fallback to API key in query string
+          resp = await axios.post(`${urlBase}?key=${encodeURIComponent(key)}`, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { timeout: 20000 });
+        }
         // response shape can vary; try several properties
-        answer = gResp?.data?.candidates?.[0]?.output || gResp?.data?.candidates?.[0]?.content || gResp?.data?.output || null;
+        answer = resp?.data?.candidates?.[0]?.output || resp?.data?.candidates?.[0]?.content || resp?.data?.output || null;
       } catch (gErr) {
-        // Provide richer error info for debugging (status + body when available)
         const status = gErr?.response?.status || null;
         const body = gErr?.response?.data || gErr.message || String(gErr);
         console.error('gemini error', { status, body, modelEnv, modelPath });
         const suggestion = status === 404
           ? `Model not found. Confirm the model name (${modelEnv}) is available to your Google Cloud project and that the Generative API is enabled. Try setting GEMINI_MODEL to a valid model id (e.g. text-bison-001) or verify your project/key permissions.`
           : (status === 401 || status === 403)
-            ? `Authentication/permission error. Ensure the API key is valid, not restricted, and the Generative Models API is enabled for the project.`
+            ? `Authentication/permission error. Ensure the API key or service-account has access and the Generative Models API is enabled for the project.`
             : `Unexpected error from Gemini. See 'body' for details.`;
         return res.status(500).json({ error: 'Gemini API error', status, body, modelEnv, modelPath, suggestion });
       }

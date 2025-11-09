@@ -10,7 +10,9 @@
     "cheerio": "^1.0.0",
     "crypto": "^1.0.1",
     "robots-parser": "^2.1.1",
-  "puppeteer": "^24.15.0",
-    "cors": "^2.8.5"
+    "puppeteer": "^24.15.0",
+    "cors": "^2.8.5",
+    "google-auth-library": "^8.7.0"
   }
 }
+
