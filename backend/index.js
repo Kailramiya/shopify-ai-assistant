@@ -8,7 +8,7 @@ const crawler = require('./crawler');
 const storage = require('./storage');
 const tokens = require('./tokens');
 const indexer = require('./indexer');
-const openroute = require('./openroute');
+// removed openroute integration per request (we'll use Gemini for LLM)
 dotenv.config();
 
 const app = express();
@@ -244,24 +244,7 @@ app.get('/widget/chat-widget.js', (req, res) => {
     return res.json({ results: postings.slice(0, 20) });
   });
 
-  // OpenRoute proxy endpoints
-  app.get('/api/openroute/geocode', async (req, res) => {
-    const { text } = req.query;
-    if (!text) return res.status(400).json({ error: 'text query required' });
-    try {
-      const out = await openroute.geocode(text);
-      return res.json(out);
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  });
 
-  app.post('/api/openroute/directions', async (req, res) => {
-    const { start, end, profile } = req.body || {};
-    if (!start || !end) return res.status(400).json({ error: 'start and end required' });
-    try {
-      const out = await openroute.directions(start, end, profile || 'driving-car');
-      return res.json(out);
-    } catch (e) { return res.status(500).json({ error: e.message }); }
-  });
 
 
 
@@ -297,8 +280,9 @@ app.post("/api/ask", async (req, res) => {
     }
 
   // Determine provider and API key. Request can pass { apiKey, provider }.
-  const provider = (req.body.provider || process.env.AI_PROVIDER || 'openai').toLowerCase();
-  const key = apiKey || (provider === 'gemini' || provider === 'google' ? process.env.GOOGLE_API_KEY : process.env.OPENAI_API_KEY);
+  // Default provider is 'gemini' (Google Generative) if GEMINI_API_KEY is set, otherwise fall back to OpenAI
+  const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'openai')).toLowerCase();
+  const key = apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
 
   if (!key) {
       // Fallback: basic keyword match against scraped text
@@ -315,7 +299,7 @@ app.post("/api/ask", async (req, res) => {
         }
         if (best.score > 0) return res.json({ answer: `From the site: ${best.sent}` });
       }
-      return res.json({ answer: 'No AI API key configured. Provide OPENAI_API_KEY in server env or send apiKey in request to enable AI answers.' });
+  return res.json({ answer: 'No AI API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY in server env, or send apiKey in the request to enable AI answers.' });
     }
 
     // Build prompt for LLM using any scraped context (truncate to safe size)
@@ -329,7 +313,7 @@ app.post("/api/ask", async (req, res) => {
     if (provider === 'gemini' || provider === 'google') {
       // Use Google Generative Language API (Gemini). This example uses the text generation
       // endpoint. The api key can be provided in the request (apiKey) or via GOOGLE_API_KEY env.
-      const model = process.env.GOOGLE_MODEL || 'text-bison-001';
+  const model = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
       try {
         const gResp = await axios.post(
           `https://generativelanguage.googleapis.com/v1/models/${model}:generate?key=${encodeURIComponent(key)}`,
