@@ -1,5 +1,18 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
+// Puppeteer is optional (heavy). We'll require it lazily when needed.
+let puppeteer = null;
+
+async function ensurePuppeteer() {
+  if (puppeteer) return puppeteer;
+  try {
+    puppeteer = require('puppeteer');
+    return puppeteer;
+  } catch (e) {
+    // not installed
+    return null;
+  }
+}
 
 /**
  * Scrape visible text from given URL.
@@ -60,11 +73,43 @@ async function scrape(url, opts = {}) {
     const h1 = $("h1").first().text().trim();
     const description = $('meta[name="description"]').attr("content") || "";
 
+    let textOut = fullText.slice(0, opts.maxLength || 2000);
+
+    // If no visible text was extracted and rendering is allowed, try a headless render (Puppeteer)
+    const shouldRender = !!opts.render || !!opts.fallbackRender;
+    if ((!textOut || textOut.length < 20) && shouldRender) {
+      const pptr = await ensurePuppeteer();
+      if (pptr) {
+        try {
+          const browser = await pptr.launch({ args: ['--no-sandbox','--disable-setuid-sandbox'], headless: true });
+          const page = await browser.newPage();
+          await page.setUserAgent(opts.userAgent || 'Shopify-AI-Scraper/1.0 (+https://example.com)');
+          await page.goto(url, { waitUntil: 'networkidle2', timeout: opts.renderTimeout || 20000 });
+          // remove unwanted elements then get visible text
+          await page.evaluate(() => {
+            const remove = ['script','style','noscript','iframe','svg','meta','link'];
+            remove.forEach(t => document.querySelectorAll(t).forEach(n => n.remove()));
+          });
+          const bodyText = await page.evaluate(() => document.body.innerText || '');
+          const title2 = await page.title();
+          const h1Text = await page.$eval('h1', el => el.innerText,).catch(() => '');
+          await browser.close();
+          textOut = (bodyText || '').replace(/\s+/g, ' ').trim().slice(0, opts.maxLength || 2000);
+          // prefer rendered metadata if original empty
+          if (!title) title = title2 || '';
+          if (!h1) h1 = h1Text || '';
+        } catch (e) {
+          // rendering failed; ignore and continue with whatever we had
+          try { if (browser && browser.close) await browser.close(); } catch (_) {}
+        }
+      }
+    }
+
     return {
       title,
       h1,
       description,
-      text: fullText.slice(0, opts.maxLength || 2000), // default limit
+      text: textOut,
       url
     };
   } catch (error) {

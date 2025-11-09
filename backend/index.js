@@ -4,6 +4,11 @@ const axios = require("axios");
 const cors = require('cors');
 const scraper = require("./scraper");
 const shopify = require('./shopify');
+const crawler = require('./crawler');
+const storage = require('./storage');
+const tokens = require('./tokens');
+const indexer = require('./indexer');
+const openroute = require('./openroute');
 dotenv.config();
 
 const app = express();
@@ -44,7 +49,9 @@ app.get('/api/auth/callback', async (req, res) => {
 
     const tokenResp = await shopify.getAccessToken(shop, code);
     // tokenResp typically contains { access_token, scope }
-    shops[shop] = { token: tokenResp.access_token, scope: tokenResp.scope, installedAt: Date.now() };
+  shops[shop] = { token: tokenResp.access_token, scope: tokenResp.scope, installedAt: Date.now() };
+  // persist token securely (if TOKEN_ENCRYPTION_KEY provided)
+  try { tokens.saveToken(shop, tokenResp); } catch (e) { console.error('save token failed', e); }
     console.log(`Installed on ${shop}`, { scope: tokenResp.scope });
     // After OAuth install, call Shopify Admin API to create ScriptTag
     await axios.post(
@@ -52,16 +59,43 @@ app.get('/api/auth/callback', async (req, res) => {
       {
         script_tag: {
           event: "onload",
-          src: "https://your-frontend-app.com/chat-widget-inject.js"
+          src: "https://localhost:5173/ChatWidget.js"
         }
       },
       {
         headers: {
-          'X-Shopify-Access-Token': accessToken,
+          'X-Shopify-Access-Token': tokenResp.access_token,
           'Content-Type': 'application/json'
         }
       }
     );
+
+    // Optionally perform a background crawl of the storefront to index pages.
+    // Enable by setting AUTO_CRAWL_ON_INSTALL=true in env. This runs async and stores results in memory (shops[shop].pages).
+    try {
+      if (process.env.AUTO_CRAWL_ON_INSTALL === 'true') {
+        (async () => {
+          try {
+            const site = `https://${shop}`;
+            const crawlOpts = {
+              maxPages: parseInt(process.env.CRAWL_MAX_PAGES || '100', 10),
+              maxDepth: parseInt(process.env.CRAWL_MAX_DEPTH || '4', 10),
+              concurrency: parseInt(process.env.CRAWL_CONCURRENCY || '5', 10),
+              perPageMaxLength: parseInt(process.env.CRAWL_PER_PAGE_MAX || '4000', 10),
+              aggregateMaxLength: parseInt(process.env.CRAWL_AGGREGATE_MAX || '100000', 10),
+              respectRobots: true
+            };
+            const crawlResult = await crawler.crawlSite(site, crawlOpts);
+            shops[shop].pages = crawlResult.pages;
+            shops[shop].aggregated = crawlResult.aggregated;
+            // build index and persist combined data
+            const idx = indexer.buildIndex(crawlResult.pages);
+            storage.writeShopData(shop, Object.assign({}, crawlResult, { index: idx }));
+            console.log(`Crawl finished for ${shop}: pages=${crawlResult.pages.length}`);
+          } catch (e) { console.error('background crawl error', e); }
+        })();
+      }
+    } catch (e) { console.error('auto crawl schedule error', e); }
 
     // For a real app, redirect to the embedded admin UI. For now, show success.
     return res.send(`App installed on ${shop}. You can close this window.`);
@@ -74,8 +108,33 @@ app.get('/api/auth/callback', async (req, res) => {
 // Scrape endpoint (simplified). Expects JSON { url }
 app.post("/api/scrape", async (req, res) => {
   try {
-    const { url } = req.body;
+    const { url, crawl, maxPages, maxDepth, concurrency } = req.body;
     if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: 'Invalid url' });
+
+  if (crawl) {
+      // Crawl the whole site (same-origin), return aggregated content and per-page metadata
+      const opts = {
+        maxPages: maxPages || parseInt(process.env.CRAWL_MAX_PAGES || '100', 10),
+        maxDepth: maxDepth || parseInt(process.env.CRAWL_MAX_DEPTH || '4', 10),
+        concurrency: concurrency || parseInt(process.env.CRAWL_CONCURRENCY || '5', 10),
+        perPageMaxLength: parseInt(process.env.CRAWL_PER_PAGE_MAX || '4000', 10),
+        aggregateMaxLength: parseInt(process.env.CRAWL_AGGREGATE_MAX || '100000', 10),
+        respectRobots: true
+      };
+      const result = await crawler.crawlSite(url, opts);
+      // build index for result and persist optionally if shop host detected
+      try {
+        const idx = indexer.buildIndex(result.pages);
+        // if it's a shop host, persist
+        try {
+          const host = new URL(url).host;
+          storage.writeShopData(host, Object.assign({}, result, { index: idx }));
+        } catch (e) { /* ignore non-host URLs */ }
+        result.index = idx;
+      } catch (e) { console.error('index build failed', e); }
+      return res.json({ data: result });
+    }
+
     const data = await scraper.scrape(url);
     return res.json({ data });
   } catch (err) {
@@ -85,6 +144,72 @@ app.post("/api/scrape", async (req, res) => {
 });
 
 // Chat API endpoint (stub)
+
+// Store results in memory for now (replace with DB if needed)
+let storeScrapeCache = {};
+
+app.post('/api/scrape-store', async (req, res) => {
+  const { baseUrl } = req.body;
+  if (!baseUrl || !/^https?:\/\/.+myshopify\.com/.test(baseUrl)) {
+    return res.status(400).json({ error: "Invalid Shopify store URL" });
+  }
+  try {
+    const crawlOpts = { maxPages: 50, maxDepth: 3, concurrency: 4, respectRobots: true };
+    const result = await crawler.crawlSite(baseUrl, crawlOpts);
+    // build index and persist
+    const idx = indexer.buildIndex(result.pages);
+    const host = new URL(baseUrl).host;
+    storage.writeShopData(host, Object.assign({}, result, { index: idx }));
+    storeScrapeCache[baseUrl] = result;
+    return res.json({ status: 'Store scraped', pageCount: result.pages.length });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+  // Endpoint to fetch stored data for a shop
+  app.get('/api/store-data', (req, res) => {
+    const shop = req.query.shop;
+    if (!shop) return res.status(400).json({ error: 'shop query param required' });
+    const data = storage.readShopData(shop);
+    if (!data) return res.status(404).json({ error: 'No stored data for shop' });
+    return res.json({ data });
+  });
+
+  // Search endpoint using built index
+  app.get('/api/search', (req, res) => {
+    const { shop, q } = req.query;
+    if (!shop || !q) return res.status(400).json({ error: 'shop and q required' });
+    const data = storage.readShopData(shop);
+    if (!data || !data.index) return res.status(404).json({ error: 'No index for shop' });
+    const term = q.toLowerCase().trim();
+    const postings = data.index[term] || [];
+    return res.json({ results: postings.slice(0, 20) });
+  });
+
+  // OpenRoute proxy endpoints
+  app.get('/api/openroute/geocode', async (req, res) => {
+    const { text } = req.query;
+    if (!text) return res.status(400).json({ error: 'text query required' });
+    try {
+      const out = await openroute.geocode(text);
+      return res.json(out);
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  app.post('/api/openroute/directions', async (req, res) => {
+    const { start, end, profile } = req.body || {};
+    if (!start || !end) return res.status(400).json({ error: 'start and end required' });
+    try {
+      const out = await openroute.directions(start, end, profile || 'driving-car');
+      return res.json(out);
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+
+
+
+
 app.post("/api/ask", async (req, res) => {
   try {
     const { question, url, apiKey } = req.body || {};
