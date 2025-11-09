@@ -24,7 +24,7 @@ app.use(cors({
       // allow explicit allowlist
       if (allowedOrigins && (allowedOrigins.includes(origin) || allowedOrigins.includes(originHost))) return callback(null, true);
       // allow Shopify stores and dev previews (convenience) - accept any myshopify.com origin
-      if (originHost && originHost.endsWith('.shopify.com')) return callback(null, true);
+      if (originHost && originHost.endsWith('.myshopify.com')) return callback(null, true);
       // allow if this origin maps to a stored shop
       try {
         const shopData = storage.readShopData(originHost);
