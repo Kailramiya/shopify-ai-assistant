@@ -22,8 +22,9 @@ app.use(cors({
     try {
       const originHost = new URL(origin).host;
       // allow explicit allowlist
-      if (allowedOrigins && allowedOrigins.includes(origin)) return callback(null, true);
-      if (allowedOrigins && allowedOrigins.includes(originHost)) return callback(null, true);
+      if (allowedOrigins && (allowedOrigins.includes(origin) || allowedOrigins.includes(originHost))) return callback(null, true);
+      // allow Shopify stores and dev previews (convenience) - accept any myshopify.com origin
+      if (originHost && originHost.endsWith('.myshopify.com')) return callback(null, true);
       // allow if this origin maps to a stored shop
       try {
         const shopData = storage.readShopData(originHost);
@@ -32,7 +33,10 @@ app.use(cors({
     } catch (e) { /* invalid origin, fallthrough */ }
     return callback(new Error('CORS blocked for origin: ' + origin));
   },
-  credentials: true
+  credentials: true,
+  // allow widget to send X-Shop-Domain and other custom headers
+  allowedHeaders: ['Content-Type', 'X-Shop-Domain', 'X-Use-Stored', 'X-SAIA-Token', 'Authorization'],
+  exposedHeaders: ['Content-Type', 'X-Shop-Domain']
 }));
 
 
