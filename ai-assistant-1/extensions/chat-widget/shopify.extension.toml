@@ -1,0 +1,9 @@
+name = "Chat Widget"
+
+uid = "288ab506-3769-fe13-0858-10bbb247f01cb0ff7c2a"
+
+type = "theme"
+description = "Shopify Theme App Extension for chat toggle widget"
+
+[extension_point]
+target = "main"          # inject into main storefront theme script

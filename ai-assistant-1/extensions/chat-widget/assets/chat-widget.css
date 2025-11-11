@@ -1,0 +1,186 @@
+/* Styles for SAIA chat widget (chat-widget.css) */
+#saia-chat-root, #saia-chat-root * { box-sizing: border-box; }
+.saia-root { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+.saia-btn { position: fixed; bottom: 20px; right: 20px; z-index: 999999; padding: 10px; border-radius: 50%; border: none; background: #008060; color: #fff; font-size: 20px; cursor: pointer; width:44px; height:44px }
+.saia-panel { position: fixed; bottom: 80px; right: 20px; width: 320px; max-height: 70vh; height: 70vh; background: #fff; border: 1px solid #ddd; border-radius: 10px; box-shadow: 0 6px 18px rgba(0,0,0,.12); overflow: hidden; display: flex; flex-direction: column; z-index: 999999; }
+.saia-header { padding: 10px 12px; background: #f6f7f9; border-bottom: 1px solid #eee; display:flex; align-items:center; justify-content:space-between; }
+.saia-close { background: transparent; border: none; font-size: 16px; cursor: pointer; }
+.saia-body {
+  flex: 1 1 auto;
+  min-height: 0; /* critical for scroll inside flex container */
+  padding: 12px;
+  font-size: 14px;
+  color: #111;
+  overflow-y: auto;         /* enables vertical scrolling */
+  max-height: calc(70vh - 120px); /* ensures body fits within panel height */
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;  /* smooth scroll for new messages */
+}
+
+/* Always show visible scrollbar (optional aesthetic) */
+.saia-body::-webkit-scrollbar {
+  width: 8px;
+}
+.saia-body::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 6px;
+}
+.saia-body::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}
+.saia-body::-webkit-scrollbar-track {
+  background: #f3f3f3;
+}
+
+
+/* Chrome, Edge, Safari scrollbar styling */
+.saia-body::-webkit-scrollbar {
+  width: 8px;
+}
+.saia-body::-webkit-scrollbar-track {
+  background: #f0f0f0;
+  border-radius: 6px;
+}
+.saia-body::-webkit-scrollbar-thumb {
+  background-color: #008060;
+  border-radius: 6px;
+}
+
+.saia-controls { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #eee; }
+.saia-input { flex: 1 1 auto; padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+.saia-send { padding: 8px 12px; border: none; background: #008060; color: #fff; border-radius: 6px; cursor: pointer; }
+.saia-msg { margin-bottom: 10px; padding: 8px; border-radius: 6px; background: #f3f4f6; }
+.saia-msg.user { background: #e6ffef; text-align: right; }
+.saia-msg.assistant { background: #fff; }
+.saia-msg.error { background: #ffecec; color: #900; }
+
+/* Typing / thinking indicator */
+.saia-msg.typing { font-style: italic; color: #666; opacity: 0.95; }
+
+/* Responsive tweaks */
+@media (max-width: 420px) {
+  .saia-panel { right: 12px; left: 12px; width: auto; bottom: 70px; }
+}
+
+/* SHOPIFY CHAT */
+#shopify-chat-widget-root {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 99999;
+}
+
+#shopify-chat-toggle {
+  background: #008060;
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 56px;
+  height: 56px;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+#shopify-chat-box {
+  position: fixed;
+  bottom: 90px;
+  right: 24px;
+  width: 350px;
+  max-height: 400px;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  z-index: 99999;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  /* Always visible scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: #008060 #f0f0f0;
+}
+
+#shopify-chat-box::-webkit-scrollbar {
+  width: 8px;
+}
+#shopify-chat-box::-webkit-scrollbar-track {
+  background: #f0f0f0;
+  border-radius: 6px;
+}
+#shopify-chat-box::-webkit-scrollbar-thumb {
+  background-color: #008060;
+  border-radius: 6px;
+}
+
+.shopify-chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 18px;
+  margin-bottom: 0;
+}
+
+.shopify-chat-close {
+  background: transparent;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+}
+
+.shopify-chat-input {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+}
+
+.shopify-chat-ask {
+  background: #008060;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.shopify-chat-answer {
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 200px;
+
+  /* Scrollbar styling */
+  scrollbar-width: thin;
+  scrollbar-color: #008060 #f0f0f0;
+}
+
+.shopify-chat-answer::-webkit-scrollbar {
+  width: 8px;
+}
+.shopify-chat-answer::-webkit-scrollbar-track {
+  background: #f0f0f0;
+  border-radius: 6px;
+}
+.shopify-chat-answer::-webkit-scrollbar-thumb {
+  background-color: #008060;
+  border-radius: 6px;
+}
+
+/* small typing indicator for the shopify chat */
+.shopify-chat-typing { font-style: italic; color: #666; }
+.shopify-chat-typing .dots { display:inline-block; margin-left:6px; animation: fade 1s linear infinite; }
+@keyframes fade { 0% { opacity: 0.25 } 50% { opacity: 1 } 100% { opacity: 0.25 } }
+
+/* keep SAIA controls visible and prevent messages from hiding the input */
+.saia-body { padding-bottom: 72px; }
+.saia-controls { position: sticky; bottom: 0; background: #fff; z-index: 3; }
+
+/* Shopify chat: ensure answer area scrolls and inputs stay visible */
+#shopify-chat-box { display: flex; flex-direction: column; }
+.shopify-chat-answer { flex: 1 1 auto; overflow-y: auto; max-height: calc(100% - 120px); }
+#shopify-chat-box { padding-bottom: 72px; }
+.shopify-chat-input { position: sticky; bottom: 12px; z-index: 4; background: transparent; }

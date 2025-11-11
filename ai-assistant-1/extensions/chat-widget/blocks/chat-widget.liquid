@@ -1,0 +1,16 @@
+<link href="{{ 'chat-widget.css' | asset_url }}" rel="stylesheet"/>
+<script>
+  window.SAIA = window.SAIA || {};
+  window.SAIA.backend = 'https://shopify-ai-assistant-md2n.onrender.com'; // must be HTTPS in production
+  // or set a small config object
+  window.SAIA.configure && window.SAIA.configure({ backend: 'https://shopify-ai-assistant-md2n.onrender.com' });
+</script>
+<script src="{{ 'chat-widget.js' | asset_url }}" defer></script>
+
+{% schema %}
+{
+  "name": "Chat Widget",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
