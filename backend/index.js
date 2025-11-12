@@ -23,7 +23,7 @@ app.use(cors({
   origin: function(origin, callback) {
     // allow non-browser clients (curl) with no origin
     if (!origin) return callback(null, true);
-    try {
+    try { 
       const originHost = new URL(origin).host;
       // allow explicit allowlist
       if (allowedOrigins && (allowedOrigins.includes(origin) || allowedOrigins.includes(originHost))) return callback(null, true);
@@ -284,9 +284,9 @@ app.post("/api/ask", async (req, res) => {
     }
 
   // Determine provider and API key. Request can pass { apiKey, provider }.
-  // Default provider is 'gemini' (Google Generative) if GEMINI_API_KEY is set, otherwise fall back to OpenAI
-  const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'openai')).toLowerCase();
-  const key = apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
+  // Default provider preference: explicit request -> env AI_PROVIDER -> OpenRouter if OPENROUTER_API_KEY set -> Gemini if GEMINI_API_KEY set -> OpenAI
+  const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.OPENROUTER_API_KEY ? 'openrouter' : (process.env.GEMINI_API_KEY ? 'gemini' : 'openai'))).toLowerCase();
+  const key = apiKey || (provider === 'openrouter' ? process.env.OPENROUTER_API_KEY : (provider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY));
 
   if (!key) {
       // Fallback: basic keyword match against scraped text
@@ -314,7 +314,33 @@ app.post("/api/ask", async (req, res) => {
 
     let answer = null;
 
-    if (provider === 'gemini' || provider === 'google') {
+    if (provider === 'openrouter') {
+      // Use OpenRouter to call the requested model (e.g. google/gemini-2.0-flash-exp:free)
+      // Allow per-request override: req.body.model or req.query.model, else use env OPENROUTER_MODEL or default provided model.
+      const requestedModel = req.body?.model || req.query?.model || process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-exp:free';
+      const model = String(requestedModel);
+      try {
+        const resp = await axios.post('https://api.openrouter.ai/v1/chat/completions', {
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.2,
+          max_tokens: 500
+        }, {
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          timeout: 30000
+        });
+        // parse response (OpenRouter follows a chat-completions like shape)
+        answer = resp?.data?.choices?.[0]?.message?.content || resp?.data?.choices?.[0]?.text || resp?.data?.output || null;
+      } catch (orErr) {
+        const status = orErr?.response?.status || null;
+        const body = orErr?.response?.data || orErr.message || String(orErr);
+        console.error('openrouter error', { status, body, model });
+        return res.status(500).json({ error: 'OpenRouter API error', status, body, model, suggestion: 'Check OPENROUTER_API_KEY and model name. If using a demo/free model, ensure OpenRouter supports it.' });
+      }
+    } else if (provider === 'gemini' || provider === 'google') {
       // Use Google Generative Language API (Gemini).
       // Allow per-request override: req.body.model or req.query.model can be provided.
       // Fallback to server env GEMINI_MODEL or GOOGLE_MODEL, then to text-bison-001.
