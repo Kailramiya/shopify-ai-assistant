@@ -287,9 +287,14 @@ app.post("/api/ask", async (req, res) => {
     }
 
   // Determine provider and API key. Request can pass { apiKey, provider }.
-  // Default provider is 'gemini' (Google Generative) if GEMINI_API_KEY is set, otherwise fall back to OpenAI
-  const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'openai')).toLowerCase();
-  const key = apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
+  // Priority: explicit request provider -> env AI_PROVIDER -> OPENROUTER_API_KEY -> GEMINI_API_KEY -> OPENAI
+  const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.OPENROUTER_API_KEY ? 'openrouter' : (process.env.GEMINI_API_KEY ? 'gemini' : 'openai'))).toLowerCase();
+  let key = apiKey || null;
+  if (!key) {
+    if (provider === 'openrouter') key = process.env.OPENROUTER_API_KEY || null;
+    else if (provider === 'gemini') key = process.env.GEMINI_API_KEY || null;
+    else if (provider === 'openai' || provider === 'openai-compat') key = process.env.OPENAI_API_KEY || null;
+  }
 
   console.log('/api/ask: provider selection', { provider, keyPresent: !!key, useStored });
 
@@ -308,7 +313,7 @@ app.post("/api/ask", async (req, res) => {
         }
         if (best.score > 0) return res.json({ answer: `From the site: ${best.sent}` });
       }
-  return res.json({ answer: 'No AI API key configured. Set GEMINI_API_KEY or OPENAI_API_KEY in server env, or send apiKey in the request to enable AI answers.' });
+  return res.json({ answer: 'No AI API key configured. Set OPENROUTER_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in server env, or send apiKey in the request to enable AI answers.' });
     }
 
     // Build prompt for LLM using any scraped context (truncate to safe size)
@@ -319,7 +324,31 @@ app.post("/api/ask", async (req, res) => {
 
     let answer = null;
 
-    if (provider === 'gemini' || provider === 'google') {
+    if (provider === 'openrouter') {
+      // OpenRouter integration
+      try {
+        const model = req.body?.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
+        console.log('openrouter: request model=', model);
+        const resp = await axios.post('https://api.openrouter.ai/v1/chat/completions', {
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.2,
+          max_tokens: 500
+        }, {
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          timeout: 20000
+        });
+        // Attempt to extract text from common OpenRouter response shapes
+        answer = resp?.data?.choices?.[0]?.message?.content || resp?.data?.choices?.[0]?.message || resp?.data?.choices?.[0]?.text || null;
+        if (typeof answer === 'object' && answer?.length) answer = Array.isArray(answer) ? answer.map(a => a?.text || a).join('\n') : (answer?.text || JSON.stringify(answer));
+      } catch (orErr) {
+        console.error('openrouter error', orErr?.response?.data || orErr.message || orErr);
+        return res.status(500).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
+      }
+    } else if (provider === 'gemini' || provider === 'google') {
       // Use Google Generative Language API (Gemini).
       // Allow per-request override: req.body.model or req.query.model can be provided.
       // Fallback to server env GEMINI_MODEL or GOOGLE_MODEL, then to text-bison-001.
@@ -473,8 +502,10 @@ app.get('/api/debug-provider', (req, res) => {
   try {
     const hasGemini = !!process.env.GEMINI_API_KEY;
     const hasOpenAI = !!process.env.OPENAI_API_KEY;
+    const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
     const geminiModel = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || null;
-    return res.json({ providerDefault: process.env.AI_PROVIDER || (hasGemini ? 'gemini' : (hasOpenAI ? 'openai' : null)), hasGemini, hasOpenAI, geminiModel });
+    const openrouterModel = process.env.OPENROUTER_MODEL || null;
+    return res.json({ providerDefault: process.env.AI_PROVIDER || (hasOpenRouter ? 'openrouter' : (hasGemini ? 'gemini' : (hasOpenAI ? 'openai' : null))), hasOpenRouter, hasGemini, hasOpenAI, geminiModel, openrouterModel });
   } catch (e) {
     return res.status(500).json({ error: 'debug error', detail: e.message });
   }
