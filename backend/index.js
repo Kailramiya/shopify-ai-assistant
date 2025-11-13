@@ -257,7 +257,7 @@ app.get('/widget/chat-widget.js', (req, res) => {
 app.post("/api/ask", async (req, res) => {
   try {
     const { question, url, apiKey } = req.body || {};
-
+    console.log('API ask received', { question: question ? question.slice(0,30) : null, url });
     if (!question || typeof question !== 'string') return res.status(400).json({ error: 'question is required' });
 
     // If useStored=true, prefer server-side persisted aggregated content for the shop
