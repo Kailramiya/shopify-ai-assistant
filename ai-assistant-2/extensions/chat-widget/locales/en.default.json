@@ -1,0 +1,10 @@
+
+{
+	"name": "Chat Widget",
+	"settings": {
+		"api_base": "API base URL"
+	},
+	"messages": {
+		"noscript": "This chat widget requires JavaScript. Please enable JavaScript to use the assistant."
+	}
+}

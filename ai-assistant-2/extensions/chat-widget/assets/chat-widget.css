@@ -1,0 +1,184 @@
+:root {
+	--saia-bg: #0b6cf5;
+	--saia-toggle-bg: #16a34a;
+	--saia-foreground: #ffffff;
+	--saia-accent: #0b6cf5;
+	--saia-muted: #6b7280;
+	--saia-border: rgba(15,23,42,0.06);
+	--saia-shadow: 0 6px 18px rgba(2,6,23,0.12);
+	--saia-radius: 12px;
+}
+
+/* Main widget container */
+.saia-widget {
+	position: fixed;
+	right: 24px;
+	bottom: 24px;
+	width: 380px;
+	max-width: calc(100% - 48px);
+	font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+	z-index: 999999;
+	box-shadow: var(--saia-shadow);
+	border-radius: var(--saia-radius);
+	overflow: hidden;
+	background: #fff;
+	border: 1px solid var(--saia-border);
+	transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+/* Header section */
+.saia-header {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 14px 16px;
+	background: linear-gradient(90deg, var(--saia-bg), #0a58d7);
+	color: var(--saia-foreground);
+}
+.saia-header .title { font-weight: 600; font-size: 15px; }
+.saia-header .subtitle { font-size: 12px; opacity: 0.95; color: rgba(255,255,255,0.9); }
+.saia-header .controls { margin-left: auto; display: flex; gap: 8px; }
+
+/* Improved Toggle Button */
+.saia-toggle-btn {
+	/* Fixed to viewport so the toggle is always visible */
+	position: fixed;
+	right: 24px;
+	bottom: 24px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+
+	/* Desktop size */
+	width: 64px;
+	height: 64px;
+
+	border-radius: 50%;
+	background: var(--saia-toggle-bg);
+	color: #fff;
+	border: none;
+	cursor: pointer;
+	box-shadow: 0 10px 28px rgba(22,163,74,0.25);
+	z-index: 1000000;
+	transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.saia-toggle-btn:hover {
+	transform: translateY(-4px);
+	box-shadow: 0 14px 34px rgba(22,163,74,0.32);
+	background: #18b357;
+}
+.saia-toggle-btn:active {
+	transform: translateY(-2px) scale(0.98);
+}
+
+/* Chat body */
+.saia-body {
+	max-height: 500px;
+	overflow: auto;
+	background: linear-gradient(180deg, #fff, #f9fbff);
+	padding: 14px;
+	scroll-behavior: smooth;
+}
+.saia-msg {
+	display: flex;
+	gap: 10px;
+	margin-bottom: 12px;
+	align-items: flex-start;
+}
+.saia-msg .avatar {
+	width: 36px;
+	height: 36px;
+	border-radius: 8px;
+	background: var(--saia-border);
+	flex-shrink: 0;
+}
+.saia-msg .bubble {
+	max-width: 78%;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: #f3f4f6;
+	color: #0f172a;
+	box-shadow: 0 1px 0 rgba(15,23,42,0.03);
+}
+.saia-msg.user {
+	flex-direction: row-reverse;
+}
+.saia-msg.user .bubble {
+	background: var(--saia-bg);
+	color: var(--saia-foreground);
+}
+
+/* Input area */
+.saia-input-wrap {
+	display: flex;
+	gap: 8px;
+	padding: 10px;
+	border-top: 1px solid var(--saia-border);
+	align-items: center;
+	background: #fff;
+}
+.saia-input {
+	flex: 1;
+	min-height: 42px;
+	border-radius: 10px;
+	padding: 10px 12px;
+	border: 1px solid var(--saia-border);
+	font-size: 14px;
+	outline: none;
+	transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+.saia-input:focus {
+	border-color: var(--saia-accent);
+	box-shadow: 0 0 0 3px rgba(11,108,245,0.1);
+}
+.saia-send {
+	background: var(--saia-accent);
+	color: #fff;
+	border: none;
+	padding: 10px 12px;
+	border-radius: 10px;
+	cursor: pointer;
+	transition: background 0.2s ease, transform 0.2s ease;
+}
+.saia-send:hover { background: #0a58d7; transform: translateY(-1px); }
+.saia-send:active { transform: scale(0.97); }
+
+/* Empty state */
+.saia-empty {
+	padding: 28px;
+	text-align: center;
+	color: var(--saia-muted);
+}
+
+/* Responsive tweaks */
+@media (max-width: 480px) {
+	.saia-widget {
+		right: 12px;
+		bottom: 12px;
+		width: 95%;
+	}
+	.saia-body {
+		max-height: 380px;
+	}
+	.saia-toggle-btn {
+		right: 16px;
+		bottom: 16px;
+		width: 56px;
+		height: 56px;
+	}
+}
+
+/* Focus and accessibility */
+.saia-toggle-btn:focus,
+.saia-send:focus,
+.saia-input:focus {
+	box-shadow: 0 0 0 6px rgba(34,197,94,0.18);
+	outline: none;
+}
+
+/* Helper */
+.saia-muted {
+	color: var(--saia-muted);
+	font-size: 13px;
+}

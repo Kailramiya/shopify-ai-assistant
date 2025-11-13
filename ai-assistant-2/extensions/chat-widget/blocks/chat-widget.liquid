@@ -1,0 +1,61 @@
+
+{%- comment -%}
+Shopify theme block for the AI chat widget.
+This injects the widget container, loads the widget CSS and JS assets shipped with the extension,
+and passes a lightweight initialization payload (shop domain / api base) via data attributes.
+
+The widget JavaScript should read the data attributes or the global `SAIA_WIDGET_CONFIG` variable
+and initialize accordingly. The widget will send `X-Shop-Domain` header when making requests.
+{%- endcomment -%}
+
+<!-- Widget container -->
+<div id="saia-chat-widget" class="saia-widget" role="region" aria-label="Shop assistant" aria-live="polite">
+	<!-- button and content will be rendered by JS -->
+</div>
+
+<!-- Styles for the widget (served from the extension assets) -->
+<link rel="stylesheet" href="{{ 'chat-widget.css' | asset_url }}" />
+
+<!-- Small inline config so the client script has shop context without exposing secrets -->
+<script>
+	window.SAIA_WIDGET_CONFIG = window.SAIA_WIDGET_CONFIG || {};
+	// shop domain available in Shopify themes as shop.domain; fallback to origin host
+	try {
+		window.SAIA_WIDGET_CONFIG.shop = {{ shop.domain | default: '' | json }};
+	} catch (e) { window.SAIA_WIDGET_CONFIG.shop = '' }
+	// allow an operator to override the API base via extension settings if provided
+	window.SAIA_WIDGET_CONFIG.apiBase = window.SAIA_WIDGET_CONFIG.apiBase || {{ settings.api_base | default: 'https://shopify-ai-assistant-md2n.onrender.com' | json }};
+
+	// Also set window.SAIA.backend so the widget uses the configured backend immediately
+	// Only set if the shop admin populated a real API base (ignore the default placeholder like "https://")
+	window.SAIA = window.SAIA || {};
+	(function(){
+		var configured = (typeof window.SAIA_WIDGET_CONFIG.apiBase === 'string') ? window.SAIA_WIDGET_CONFIG.apiBase.trim() : 'https://shopify-ai-assistant-md2n.onrender.com';
+		if (configured && configured !== 'https://' && configured !== 'http://' ) {
+			try { window.SAIA.backend = configured.replace(/\/$/, ''); } catch (e) { window.SAIA.backend = configured; }
+		}
+	})();
+</script>
+
+<!-- Load the widget script from extension assets; it will render into #saia-chat-widget -->
+<script defer src="{{ 'chat-widget.js' | asset_url }}"></script>
+
+<noscript>
+	<div class="saia-empty">This chat widget requires JavaScript. Please enable JavaScript to use the assistant.</div>
+</noscript>
+
+{% schema %}
+{
+	"name": "Chat Widget",
+	"target": "body",
+	"settings": [
+		{
+			"type": "text",
+			"id": "api_base",
+			"label": "API base URL",
+			"default": "https://"
+		}
+	]
+}
+{% endschema %}
+
