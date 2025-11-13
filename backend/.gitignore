@@ -1,0 +1,47 @@
+(# Node.js dependencies)
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime files
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Environment files
+.env
+.env.*
+
+# Build output
+dist/
+build/
+out/
+.cache/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary archives
+*.tgz
+*.zip
+
+# Ignore local dev tunnels and temporary shopify files
+.shopify/
+.cloudflared/
+
