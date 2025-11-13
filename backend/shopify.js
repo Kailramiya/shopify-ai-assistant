@@ -10,7 +10,9 @@ function buildInstallUrl(shop, scopes = 'read_products,write_script_tags', redir
   if (!shop) throw new Error('shop domain required');
   const key = process.env.SHOPIFY_API_KEY;
   if (!key) throw new Error('SHOPIFY_API_KEY not set');
-  const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(key)}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${generateNonce()}`;
+  const state = generateNonce();
+  const url = `https://${shop}/admin/oauth/authorize?client_id=${encodeURIComponent(key)}&scope=${encodeURIComponent(scopes)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+  console.log('shopify: buildInstallUrl for', shop, 'redirect=', redirectUri);
   return url;
 }
 
@@ -38,6 +40,8 @@ function verifyHmac(query) {
   const bufferA = Buffer.from(digest, 'utf8');
   const bufferB = Buffer.from(hmac, 'utf8');
   if (bufferA.length !== bufferB.length) return false;
+  const ok = crypto.timingSafeEqual(bufferA, bufferB);
+  console.log('shopify: verifyHmac result=', ok);
   return crypto.timingSafeEqual(bufferA, bufferB);
 }
 
@@ -46,11 +50,13 @@ async function getAccessToken(shop, code) {
   const secret = process.env.SHOPIFY_API_SECRET;
   if (!key || !secret) throw new Error('SHOPIFY_API_KEY/SECRET not configured');
   const url = `https://${shop}/admin/oauth/access_token`;
+  console.log('shopify: exchanging code for access token for', shop);
   const resp = await axios.post(url, {
     client_id: key,
     client_secret: secret,
     code
   }, { timeout: 10000 });
+  console.log('shopify: access token received for', shop);
   return resp.data; // should contain access_token and scope
 }
 

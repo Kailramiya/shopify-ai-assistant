@@ -10,6 +10,7 @@ function tokenize(text) {
 }
 
 function buildIndex(pages) {
+  console.log('indexer: building index for', (pages && pages.length) || 0, 'pages');
   // pages: [{url, title, h1, text}]
   const index = {}; // token -> { url -> count }
   for (const p of pages) {
@@ -26,6 +27,7 @@ function buildIndex(pages) {
   for (const t of Object.keys(index)) {
     index[t].sort((a, b) => b.count - a.count);
   }
+  console.log('indexer: built index terms=', Object.keys(index).length);
   return index;
 }
 

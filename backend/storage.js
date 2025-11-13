@@ -28,8 +28,12 @@ function writeShopData(shop, data) {
   try {
     ensureDir();
     const fp = filePathForShop(shop);
-    const out = Object.assign({}, data, { lastCrawledAt: Date.now() });
+    // merge with existing to preserve installedAt and other metadata
+    let existing = null;
+    try { existing = readShopData(shop) || {}; } catch (e) { existing = {}; }
+    const out = Object.assign({}, existing, data, { lastCrawledAt: Date.now() });
     fs.writeFileSync(fp, JSON.stringify(out, null, 2), 'utf8');
+    console.log('storage: wrote data for', shop, 'to', fp, 'pages=', (out.pages && out.pages.length) || 0);
     return true;
   } catch (e) {
     console.error('storage write error', e);
@@ -39,6 +43,7 @@ function writeShopData(shop, data) {
 
 function readShopData(shop) {
   try {
+    console.log('storage: readShopData for', shop);
     const fp = filePathForShop(shop);
     if (!fs.existsSync(fp)) return null;
     const raw = fs.readFileSync(fp, 'utf8');
@@ -53,7 +58,9 @@ function listShops() {
   try {
     ensureDir();
     const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json'));
-    return files.map(f => f.replace(/\.json$/, ''));
+    const shops = files.map(f => f.replace(/\.json$/, ''));
+    console.log('storage: listShops ->', shops.length, 'shops');
+    return shops;
   } catch (e) {
     return [];
   }

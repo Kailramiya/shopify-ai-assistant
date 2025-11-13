@@ -116,9 +116,9 @@ app.get('/api/auth/callback', async (req, res) => {
             const crawlResult = await crawler.crawlSite(site, crawlOpts);
             shops[shop].pages = crawlResult.pages;
             shops[shop].aggregated = crawlResult.aggregated;
-            // build index and persist combined data
+            // build index and persist combined data (include installedAt metadata)
             const idx = indexer.buildIndex(crawlResult.pages);
-            storage.writeShopData(shop, Object.assign({}, crawlResult, { index: idx }));
+            storage.writeShopData(shop, Object.assign({}, crawlResult, { index: idx, installedAt: shops[shop].installedAt }));
             console.log(`Crawl finished for ${shop}: pages=${crawlResult.pages.length}`);
           } catch (e) { console.error('background crawl error', e); }
         })();
@@ -137,6 +137,7 @@ app.get('/api/auth/callback', async (req, res) => {
 app.post("/api/scrape", async (req, res) => {
   try {
     const { url, crawl, maxPages, maxDepth, concurrency } = req.body;
+    console.log('/api/scrape: request', { url, crawl, maxPages, maxDepth, concurrency });
     if (!url || !/^https?:\/\//.test(url)) return res.status(400).json({ error: 'Invalid url' });
 
   if (crawl) {
@@ -178,6 +179,7 @@ let storeScrapeCache = {};
 
 app.post('/api/scrape-store', async (req, res) => {
   const { baseUrl } = req.body;
+  console.log('/api/scrape-store: request', { baseUrl });
   if (!baseUrl || !/^https?:\/\/.+myshopify\.com/.test(baseUrl)) {
     return res.status(400).json({ error: "Invalid Shopify store URL" });
   }
@@ -199,6 +201,7 @@ app.get('/api/widget-config', (req, res) => {
   try {
     // determine shop from header or origin
     const shop = req.get('X-Shop-Domain') || (req.get('Origin') ? new URL(req.get('Origin')).host : null);
+    console.log('/api/widget-config: shop detected', shop);
     let cfg = { apiBase: process.env.PUBLIC_APP_URL || '', useStored: false };
     if (shop) {
       const data = storage.readShopData(shop);
@@ -287,6 +290,8 @@ app.post("/api/ask", async (req, res) => {
   // Default provider is 'gemini' (Google Generative) if GEMINI_API_KEY is set, otherwise fall back to OpenAI
   const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.GEMINI_API_KEY ? 'gemini' : 'openai')).toLowerCase();
   const key = apiKey || (provider === 'gemini' ? process.env.GEMINI_API_KEY : process.env.OPENAI_API_KEY);
+
+  console.log('/api/ask: provider selection', { provider, keyPresent: !!key, useStored });
 
   if (!key) {
       // Fallback: basic keyword match against scraped text
@@ -400,7 +405,68 @@ app.post("/api/ask", async (req, res) => {
 
 // Server listen
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
+// Simple scheduled crawler: runs periodically and re-crawls shops older than threshold
+const crawlingShops = {};
+
+async function performCrawlForShop(shop) {
+  if (crawlingShops[shop]) return;
+  crawlingShops[shop] = true;
+  try {
+    console.log(`Scheduled crawl starting for ${shop}`);
+    const site = `https://${shop}`;
+    const crawlOpts = {
+      maxPages: parseInt(process.env.CRAWL_MAX_PAGES || '100', 10),
+      maxDepth: parseInt(process.env.CRAWL_MAX_DEPTH || '4', 10),
+      concurrency: parseInt(process.env.CRAWL_CONCURRENCY || '5', 10),
+      perPageMaxLength: parseInt(process.env.CRAWL_PER_PAGE_MAX || '4000', 10),
+      aggregateMaxLength: parseInt(process.env.CRAWL_AGGREGATE_MAX || '100000', 10),
+      respectRobots: true
+    };
+    const result = await crawler.crawlSite(site, crawlOpts);
+    const idx = indexer.buildIndex(result.pages);
+    // persist; storage.writeShopData will merge existing installedAt
+    storage.writeShopData(shop, Object.assign({}, result, { index: idx }));
+    console.log(`Scheduled crawl finished for ${shop}: pages=${result.pages.length}`);
+  } catch (e) {
+    console.error(`Scheduled crawl failed for ${shop}`, e);
+  } finally {
+    crawlingShops[shop] = false;
+  }
+}
+
+async function runScheduledCrawls() {
+  try {
+    const thresholdDays = parseInt(process.env.CRAWL_THRESHOLD_DAYS || '7', 10);
+    const now = Date.now();
+    const thresholdMs = thresholdDays * 24 * 60 * 60 * 1000;
+    const shopFiles = storage.listShops();
+    for (const sf of shopFiles) {
+      // sf is the filename (without .json) as produced by listShops(), which returns sanitized names
+      const data = storage.readShopData(sf);
+      if (!data) continue;
+      const last = data.lastCrawledAt || data.installedAt || 0;
+      if (!last || (now - last) >= thresholdMs) {
+        // Kick off crawl but don't block the loop (perform sequentially to avoid overload)
+        // We'll await to pace things, but protect from long-running overlap via crawlingShops
+        await performCrawlForShop(sf);
+      }
+    }
+  } catch (e) { console.error('runScheduledCrawls error', e); }
+}
+
+function startCrawlScheduler() {
+  const intervalHours = parseInt(process.env.CRAWL_CHECK_INTERVAL_HOURS || '24', 10);
+  const intervalMs = Math.max(1, intervalHours) * 60 * 60 * 1000;
+  // Run once on startup (but non-blocking)
+  setTimeout(() => { runScheduledCrawls(); }, 5 * 1000);
+  // Then schedule regularly
+  setInterval(() => { runScheduledCrawls(); }, intervalMs);
+}
+
+app.listen(PORT, () => {
+  console.log(`Backend listening on ${PORT}`);
+  try { startCrawlScheduler(); } catch (e) { console.error('failed to start crawl scheduler', e); }
+});
 
 // Debug endpoint to inspect which provider/env is configured (safe: does not return API keys)
 app.get('/api/debug-provider', (req, res) => {

@@ -23,6 +23,7 @@ async function ensurePuppeteer() {
  */
 async function scrape(url, opts = {}) {
   try {
+    console.log('scrape: starting', url);
     const response = await axios.get(url, {
       timeout: opts.timeout || 15000,
       headers: {
@@ -31,8 +32,8 @@ async function scrape(url, opts = {}) {
         Accept: "text/html,application/xhtml+xml"
       }
     });
-
     const html = response.data;
+    console.log('scrape: fetched', url, 'bytes=', html ? html.length : 0);
     const $ = cheerio.load(html);
 
     // Remove elements that should not contribute to visible text
@@ -78,6 +79,7 @@ async function scrape(url, opts = {}) {
     // If no visible text was extracted and rendering is allowed, try a headless render (Puppeteer)
     const shouldRender = !!opts.render || !!opts.fallbackRender;
     if ((!textOut || textOut.length < 20) && shouldRender) {
+      console.log('scrape: attempting render fallback for', url);
       const pptr = await ensurePuppeteer();
       if (pptr) {
         try {
@@ -99,12 +101,14 @@ async function scrape(url, opts = {}) {
           if (!title) title = title2 || '';
           if (!h1) h1 = h1Text || '';
         } catch (e) {
+          console.log('scrape: render fallback failed for', url, e && (e.message || e));
           // rendering failed; ignore and continue with whatever we had
           try { if (browser && browser.close) await browser.close(); } catch (_) {}
         }
       }
     }
 
+    console.log('scrape: finished for', url, 'chars=', (textOut || '').length);
     return {
       title,
       h1,
@@ -113,6 +117,7 @@ async function scrape(url, opts = {}) {
       url
     };
   } catch (error) {
+    console.log('scrape: error for', url, error && (error.message || error));
     // Provide more detailed error for debugging in dev, but keep shape consistent
     return { error: error.message || String(error), url };
   }

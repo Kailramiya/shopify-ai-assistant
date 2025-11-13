@@ -17,13 +17,16 @@ const robotsParser = require('robots-parser');
  */
 async function fetchRobotsTxt(rootUrl, userAgent = '*') {
   try {
+    console.log('fetchRobotsTxt: fetching robots.txt for', rootUrl);
     const robotsUrl = new URL('/robots.txt', rootUrl).toString();
     const resp = await axios.get(robotsUrl, { timeout: 5000, validateStatus: () => true });
     const body = resp.status === 200 ? resp.data : '';
     const robots = robotsParser(robotsUrl, body);
     const crawlDelay = robots.getCrawlDelay ? (robots.getCrawlDelay(userAgent) || 0) : 0;
+    console.log('fetchRobotsTxt: crawlDelay=', crawlDelay);
     return { robots, crawlDelay };
   } catch (e) {
+    console.log('fetchRobotsTxt: failed to fetch robots for', rootUrl, 'error:', e.message || e);
     return { robots: null, crawlDelay: 0 };
   }
 }
@@ -54,6 +57,7 @@ function normalizeUrl(base, href) {
 }
 
 async function crawlSite(startUrl, opts = {}) {
+  console.log('crawlSite: start', startUrl, opts && Object.keys(opts).length ? opts : 'no-opts');
   const maxPages = opts.maxPages || 100;
   const maxDepth = opts.maxDepth || 4;
   const concurrency = opts.concurrency || 5;
@@ -64,6 +68,7 @@ async function crawlSite(startUrl, opts = {}) {
   const rootOrigin = root.origin;
 
   const { disallow, crawlDelay } = respectRobots ? await fetchRobotsTxt(rootOrigin, '*') : { disallow: [], crawlDelay: 0 };
+  console.log('crawlSite: robots parsed, crawlDelay=', crawlDelay);
 
   const seen = new Set();
   const pages = [];
@@ -81,9 +86,13 @@ async function crawlSite(startUrl, opts = {}) {
     seen.add(url);
 
     try {
+      console.log('crawlSite: worker processing', url, 'depth', depth);
       const u = new URL(url);
       if (u.origin !== rootOrigin) return;
-      if (!isAllowedByRobots(u.pathname, disallow)) return;
+      if (!isAllowedByRobots(u.pathname, disallow)) {
+        console.log('crawlSite: disallowed by robots', url);
+        return;
+      }
 
       // scrape visible text and metadata (allow Puppeteer render fallback for JS-heavy sites)
       const scraped = await scrape(url, {
@@ -92,6 +101,9 @@ async function crawlSite(startUrl, opts = {}) {
         fallbackRender: opts.fallbackRender !== undefined ? opts.fallbackRender : true,
         renderTimeout: opts.renderTimeout || 20000
       });
+
+      if (!scraped) console.log('crawlSite: scrape returned empty for', url);
+      if (scraped && scraped.error) console.log('crawlSite: scrape error for', url, scraped.error);
 
       // fallback if scrape returned error
       const page = {
@@ -124,9 +136,11 @@ async function crawlSite(startUrl, opts = {}) {
           });
         }
       } catch (e) {
+        console.log('crawlSite: link extraction failed for', url, e.message || e);
         // ignore link extraction failures
       }
     } catch (err) {
+      console.log('crawlSite: page processing error for', url, err && (err.message || err));
       // swallow page errors but continue
     } finally {
       // when finished, allow another worker to start
@@ -160,6 +174,8 @@ async function crawlSite(startUrl, opts = {}) {
     if (aggregated.length >= aggregateLimit) break;
     aggregated += `\n\n# ${p.url}\n${p.title ? p.title + '\n' : ''}${p.h1 ? p.h1 + '\n' : ''}${p.text}\n`;
   }
+
+  console.log('crawlSite: finished', { pages: pages.length, aggregatedChars: aggregated.length });
 
   return { pages, aggregated };
 }

@@ -19,6 +19,7 @@ function encrypt(obj) {
   if (!key) {
     // fallback to plaintext write (not secure)
     fs.writeFileSync(TOKEN_FILE, plain, 'utf8');
+    console.log('tokens: wrote plaintext tokens to', TOKEN_FILE);
     return true;
   }
   const iv = crypto.randomBytes(12);
@@ -27,6 +28,7 @@ function encrypt(obj) {
   const tag = cipher.getAuthTag();
   const out = Buffer.concat([iv, tag, encrypted]).toString('base64');
   fs.writeFileSync(TOKEN_FILE, out, 'utf8');
+  console.log('tokens: encrypted tokens written to', TOKEN_FILE);
   return true;
 }
 
@@ -54,12 +56,14 @@ function decrypt() {
 }
 
 function saveToken(shop, tokenObj) {
+  console.log('tokens: saving token for', shop);
   const store = decrypt();
   store[shop] = tokenObj;
   return encrypt(store);
 }
 
 function getToken(shop) {
+  console.log('tokens: getToken for', shop);
   const store = decrypt();
   return store[shop] || null;
 }
