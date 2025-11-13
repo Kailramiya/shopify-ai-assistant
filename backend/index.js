@@ -296,7 +296,19 @@ app.post("/api/ask", async (req, res) => {
     else if (provider === 'openai' || provider === 'openai-compat') key = process.env.OPENAI_API_KEY || null;
   }
 
-  console.log('/api/ask: provider selection', { provider, keyPresent: !!key, useStored });
+  // sanitize key: trim whitespace/newlines and remove surrounding quotes
+  try {
+    if (typeof key === 'string') {
+      key = key.trim();
+      // remove any surrounding single or double quotes that might have been included
+      key = key.replace(/^'+|'+$/g, '');
+      key = key.replace(/^"+|"+$/g, '');
+      // remove stray CR/LF
+      key = key.replace(/[\r\n]/g, '');
+    }
+  } catch (e) { /* ignore */ }
+
+  console.log('/api/ask: provider selection', { provider, keyPresent: !!key, keyLength: key ? String(key).length : 0, useStored });
 
   if (!key) {
       // Fallback: basic keyword match against scraped text
