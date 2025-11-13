@@ -21,6 +21,20 @@ const defaultHttpsAgent = new https.Agent({
   rejectUnauthorized: false,
 });
 
+// Optional: force Node's DNS resolver to use specific servers. This affects
+// Node's internal resolver calls (dns.resolve etc.) but may not affect the
+// OS-level getaddrinfo used by some network stacks. Use with caution.
+const dns = require('dns');
+if (process.env.FORCE_DNS === '1' || process.env.FORCE_DNS === 'true') {
+  const servers = process.env.FORCE_DNS_SERVERS ? process.env.FORCE_DNS_SERVERS.split(',').map(s => s.trim()).filter(Boolean) : ['8.8.8.8', '1.1.1.1'];
+  try {
+    dns.setServers(servers);
+    console.log('dns.setServers applied', servers);
+  } catch (e) {
+    console.warn('dns.setServers failed', e && e.message ? e.message : e);
+  }
+}
+
 const app = express();
 app.use(express.json());
 // Dynamic CORS: allow requests from known shop origins or configured ALLOWED_ORIGINS
@@ -336,7 +350,10 @@ app.post("/api/ask", async (req, res) => {
       try {
         const model = req.body?.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
         console.log('openrouter: request model=', model);
-        const resp = await axios.post('https://api.openrouter.ai/v1/chat/completions', {
+        const baseOpenRouterUrl = 'https://api.openrouter.ai/v1/chat/completions';
+        const openrouterUrl = (process.env.OPENROUTER_RELAY_PREFIX || '') + baseOpenRouterUrl;
+        console.log('openrouter: using URL', openrouterUrl);
+        const resp = await axios.post(openrouterUrl, {
           model,
           messages: [
             { role: 'system', content: systemPrompt },
