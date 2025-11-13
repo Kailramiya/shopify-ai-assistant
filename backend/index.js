@@ -8,12 +8,18 @@ const crawler = require('./crawler');
 const storage = require('./storage');
 const tokens = require('./tokens');
 const indexer = require('./indexer');
-// removed openroute integration per request (we'll use Gemini for LLM)
+// This server is configured to use OpenRouter as the sole LLM provider.
 dotenv.config();
 
-// Optional Google auth library for service-account OAuth
-let GoogleAuth = null;
-try { GoogleAuth = require('google-auth-library').GoogleAuth; } catch (e) { /* optional */ }
+// Optional HTTPS agent to reuse sockets and allow TLS tweaks. NOTE: setting
+// `rejectUnauthorized: false` disables certificate verification and is a
+// security risk; only use if you understand the implications (e.g. in a
+// controlled test environment). It does not fix DNS resolution errors.
+const https = require('https');
+const defaultHttpsAgent = new https.Agent({
+  keepAlive: true,
+  rejectUnauthorized: false,
+});
 
 const app = express();
 app.use(express.json());
@@ -286,49 +292,39 @@ app.post("/api/ask", async (req, res) => {
       } catch (e) { console.error('live scrape error', e); }
     }
 
-  // Determine provider and API key. Request can pass { apiKey, provider }.
-  // Priority: explicit request provider -> env AI_PROVIDER -> OPENROUTER_API_KEY -> GEMINI_API_KEY -> OPENAI
-  const provider = (req.body.provider || process.env.AI_PROVIDER || (process.env.OPENROUTER_API_KEY ? 'openrouter' : (process.env.GEMINI_API_KEY ? 'gemini' : 'openai'))).toLowerCase();
-  let key = apiKey || null;
-  if (!key) {
-    if (provider === 'openrouter') key = process.env.OPENROUTER_API_KEY || null;
-    else if (provider === 'gemini') key = process.env.GEMINI_API_KEY || null;
-    else if (provider === 'openai' || provider === 'openai-compat') key = process.env.OPENAI_API_KEY || null;
-  }
+  // Determine provider and API key: this server uses OpenRouter exclusively.
+  let key = apiKey || process.env.OPENROUTER_API_KEY || null;
 
   // sanitize key: trim whitespace/newlines and remove surrounding quotes
   try {
     if (typeof key === 'string') {
       key = key.trim();
-      // remove any surrounding single or double quotes that might have been included
       key = key.replace(/^'+|'+$/g, '');
       key = key.replace(/^"+|"+$/g, '');
-      // remove stray CR/LF
       key = key.replace(/[\r\n]/g, '');
     }
   } catch (e) { /* ignore */ }
 
-  console.log('/api/ask: provider selection', { provider, keyPresent: !!key, keyLength: key ? String(key).length : 0, useStored });
+  console.log('/api/ask: using OpenRouter', { keyPresent: !!key, keyLength: key ? String(key).length : 0, useStored });
 
   if (!key) {
-      // Fallback: basic keyword match against scraped text
-      if (contextText) {
-        const qWords = question.toLowerCase().split(/\W+/).filter(Boolean);
-        const sentences = contextText.split(/[\.\n]+/).map(s => s.trim()).filter(Boolean);
-        // score sentences by number of matching words
-        let best = { score: 0, sent: '' };
-        for (const s of sentences) {
-          const sl = s.toLowerCase();
-          let score = 0;
-          for (const w of qWords) if (w.length>2 && sl.includes(w)) score++;
-          if (score > best.score) best = { score, sent: s };
-        }
-        if (best.score > 0) return res.json({ answer: `From the site: ${best.sent}` });
+    // Fallback: basic keyword match against scraped text
+    if (contextText) {
+      const qWords = question.toLowerCase().split(/\W+/).filter(Boolean);
+      const sentences = contextText.split(/[\.\n]+/).map(s => s.trim()).filter(Boolean);
+      let best = { score: 0, sent: '' };
+      for (const s of sentences) {
+        const sl = s.toLowerCase();
+        let score = 0;
+        for (const w of qWords) if (w.length > 2 && sl.includes(w)) score++;
+        if (score > best.score) best = { score, sent: s };
       }
-  return res.json({ answer: 'No AI API key configured. Set OPENROUTER_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY in server env, or send apiKey in the request to enable AI answers.' });
+      if (best.score > 0) return res.json({ answer: `From the site: ${best.sent}` });
     }
+    return res.json({ answer: 'No AI API key configured. Set OPENROUTER_API_KEY in server env, or send apiKey in the request to enable AI answers.' });
+  }
 
-    // Build prompt for LLM using any scraped context (truncate to safe size)
+  // Build prompt for LLM using any scraped context (truncate to safe size)
     const maxContext = 3000;
     const contextForPrompt = contextText ? contextText.slice(0, maxContext) : '';
     const systemPrompt = 'You are a helpful assistant that answers questions only using the provided website content when available. If the answer is not in the content, say you don\'t know.';
@@ -336,8 +332,7 @@ app.post("/api/ask", async (req, res) => {
 
     let answer = null;
 
-    if (provider === 'openrouter') {
-      // OpenRouter integration
+    // OpenRouter integration (this server uses OpenRouter exclusively)
       try {
         const model = req.body?.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
         console.log('openrouter: request model=', model);
@@ -351,6 +346,7 @@ app.post("/api/ask", async (req, res) => {
           max_tokens: 500
         }, {
           headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          httpsAgent: defaultHttpsAgent,
           timeout: 20000
         });
         // Attempt to extract text from common OpenRouter response shapes
@@ -358,150 +354,10 @@ app.post("/api/ask", async (req, res) => {
         if (typeof answer === 'object' && answer?.length) answer = Array.isArray(answer) ? answer.map(a => a?.text || a).join('\n') : (answer?.text || JSON.stringify(answer));
       } catch (orErr) {
         console.error('openrouter error', orErr?.response?.data || orErr.message || orErr);
-        // If the error looks like a network/DNS issue, try fallback to OpenAI (if configured)
-        const netCodes = ['ENOTFOUND', 'ECONNREFUSED', 'ENETUNREACH', 'EAI_AGAIN'];
-        const isNetworkErr = orErr && (netCodes.includes(orErr.code) || (orErr.message && (orErr.message.includes('getaddrinfo') || orErr.message.includes('ENOTFOUND'))));
-        if (isNetworkErr) {
-          console.log('openrouter: network error detected, attempting fallback to other providers');
-          try {
-            // Prefer OpenAI fallback (simpler) if configured
-            const openaiKey = process.env.OPENAI_API_KEY || null;
-            if (openaiKey) {
-              console.log('openrouter: falling back to OpenAI');
-              const resp2 = await axios.post('https://api.openai.com/v1/chat/completions', {
-                model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-                messages: [
-                  { role: 'system', content: systemPrompt },
-                  { role: 'user', content: userPrompt }
-                ],
-                temperature: 0.2,
-                max_tokens: 500
-              }, {
-                headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
-                timeout: 20000
-              });
-              answer = resp2?.data?.choices?.[0]?.message?.content || null;
-            } else if (process.env.GEMINI_API_KEY) {
-              // As a last resort, try Gemini if available
-              console.log('openrouter: falling back to Gemini');
-              const requestedModel = req.body?.model || req.query?.model || null;
-              const modelEnvRaw = requestedModel || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
-              const modelEnv = String(modelEnvRaw).toLowerCase();
-              const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
-              const urlBase = `https://generativelanguage.googleapis.com/v1/${modelPath}:generate`;
-              // try service-account token first
-              let resp3;
-              const saToken = await (async function getServiceAccountAccessToken(){
-                try {
-                  if (!GoogleAuth) return null;
-                  const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
-                  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-                    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-                    const auth = new GoogleAuth({ credentials: creds, scopes });
-                    const client = await auth.getClient();
-                    const at = await client.getAccessToken();
-                    return (typeof at === 'string') ? at : (at?.token || null);
-                  }
-                  if (process.env.GOOGLE_SERVICE_ACCOUNT_PATH) {
-                    const auth = new GoogleAuth({ keyFilename: process.env.GOOGLE_SERVICE_ACCOUNT_PATH, scopes });
-                    const client = await auth.getClient();
-                    const at = await client.getAccessToken();
-                    return (typeof at === 'string') ? at : (at?.token || null);
-                  }
-                  return null;
-                } catch (e) { return null; }
-              })();
-              if (saToken) {
-                resp3 = await axios.post(urlBase, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { headers: { Authorization: `Bearer ${saToken}`, 'Content-Type': 'application/json' }, timeout: 20000 });
-              } else {
-                resp3 = await axios.post(`${urlBase}?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { timeout: 20000 });
-              }
-              answer = resp3?.data?.candidates?.[0]?.output || resp3?.data?.candidates?.[0]?.content || resp3?.data?.output || null;
-            }
-          } catch (fbErr) {
-            console.error('fallback error after OpenRouter failure', fbErr?.response?.data || fbErr.message || fbErr);
-            return res.status(500).json({ error: 'OpenRouter API error (and fallback failed)', detail: fbErr?.response?.data || fbErr.message });
-          }
-        }
-        // If not a network error or fallback didn't set answer, return original error
-        if (!answer) return res.status(500).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
+        // This deployment uses OpenRouter only; do not attempt fallbacks to other providers.
+        return res.status(502).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
       }
-    } else if (provider === 'gemini' || provider === 'google') {
-      // Use Google Generative Language API (Gemini).
-      // Allow per-request override: req.body.model or req.query.model can be provided.
-      // Fallback to server env GEMINI_MODEL or GOOGLE_MODEL, then to text-bison-001.
-      const requestedModel = req.body?.model || req.query?.model || null;
-  const modelEnvRaw = requestedModel || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
-  // Normalize and lowercase to avoid accidental case mismatches (model ids are lowercase)
-  const modelEnv = String(modelEnvRaw).toLowerCase();
-  // Normalize to a models/<id> path for the REST endpoint
-  const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
-      // Helper: obtain access token from a provided service account JSON or key file
-      async function getServiceAccountAccessToken() {
-        try {
-          if (!GoogleAuth) return null;
-          const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
-          if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-            const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-            const auth = new GoogleAuth({ credentials: creds, scopes });
-            const client = await auth.getClient();
-            const at = await client.getAccessToken();
-            return (typeof at === 'string') ? at : (at?.token || null);
-          }
-          if (process.env.GOOGLE_SERVICE_ACCOUNT_PATH) {
-            const auth = new GoogleAuth({ keyFilename: process.env.GOOGLE_SERVICE_ACCOUNT_PATH, scopes });
-            const client = await auth.getClient();
-            const at = await client.getAccessToken();
-            return (typeof at === 'string') ? at : (at?.token || null);
-          }
-          return null;
-        } catch (e) {
-          console.error('service-account token error', e?.response?.data || e.message || e);
-          return null;
-        }
-      }
-
-      try {
-        const urlBase = `https://generativelanguage.googleapis.com/v1/${modelPath}:generate`;
-        let resp;
-        // Try service-account OAuth first if configured
-        const saToken = await getServiceAccountAccessToken();
-        if (saToken) {
-          resp = await axios.post(urlBase, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { headers: { Authorization: `Bearer ${saToken}`, 'Content-Type': 'application/json' }, timeout: 20000 });
-        } else {
-          // Fallback to API key in query string
-          resp = await axios.post(`${urlBase}?key=${encodeURIComponent(key)}`, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { timeout: 20000 });
-        }
-        // response shape can vary; try several properties
-        answer = resp?.data?.candidates?.[0]?.output || resp?.data?.candidates?.[0]?.content || resp?.data?.output || null;
-      } catch (gErr) {
-        const status = gErr?.response?.status || null;
-        const body = gErr?.response?.data || gErr.message || String(gErr);
-        console.error('gemini error', { status, body, modelEnv, modelPath });
-        const suggestion = status === 404
-          ? `Model not found. Confirm the model name (${modelEnv}) is available to your Google Cloud project and that the Generative API is enabled. Try setting GEMINI_MODEL to a valid model id (e.g. text-bison-001) or verify your project/key permissions.`
-          : (status === 401 || status === 403)
-            ? `Authentication/permission error. Ensure the API key or service-account has access and the Generative Models API is enabled for the project.`
-            : `Unexpected error from Gemini. See 'body' for details.`;
-        return res.status(500).json({ error: 'Gemini API error', status, body, modelEnv, modelPath, suggestion });
-      }
-    } else {
-      // Call OpenAI Chat Completions
-      const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
-        model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.2,
-        max_tokens: 500
-      }, {
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        timeout: 20000
-      });
-
-      answer = resp?.data?.choices?.[0]?.message?.content || null;
-    }
+    // Only OpenRouter provider is supported in this deployment. Other providers removed.
   if (!answer) return res.status(500).json({ error: 'No answer from AI provider', raw: (typeof resp !== 'undefined' ? resp.data : null) });
     return res.json({ answer });
   } catch (err) {
@@ -578,12 +434,9 @@ app.listen(PORT, () => {
 // Debug endpoint to inspect which provider/env is configured (safe: does not return API keys)
 app.get('/api/debug-provider', (req, res) => {
   try {
-    const hasGemini = !!process.env.GEMINI_API_KEY;
-    const hasOpenAI = !!process.env.OPENAI_API_KEY;
     const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
-    const geminiModel = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || null;
     const openrouterModel = process.env.OPENROUTER_MODEL || null;
-    return res.json({ providerDefault: process.env.AI_PROVIDER || (hasOpenRouter ? 'openrouter' : (hasGemini ? 'gemini' : (hasOpenAI ? 'openai' : null))), hasOpenRouter, hasGemini, hasOpenAI, geminiModel, openrouterModel });
+    return res.json({ providerDefault: process.env.AI_PROVIDER || (hasOpenRouter ? 'openrouter' : null), hasOpenRouter, openrouterModel });
   } catch (e) {
     return res.status(500).json({ error: 'debug error', detail: e.message });
   }
