@@ -358,7 +358,73 @@ app.post("/api/ask", async (req, res) => {
         if (typeof answer === 'object' && answer?.length) answer = Array.isArray(answer) ? answer.map(a => a?.text || a).join('\n') : (answer?.text || JSON.stringify(answer));
       } catch (orErr) {
         console.error('openrouter error', orErr?.response?.data || orErr.message || orErr);
-        return res.status(500).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
+        // If the error looks like a network/DNS issue, try fallback to OpenAI (if configured)
+        const netCodes = ['ENOTFOUND', 'ECONNREFUSED', 'ENETUNREACH', 'EAI_AGAIN'];
+        const isNetworkErr = orErr && (netCodes.includes(orErr.code) || (orErr.message && (orErr.message.includes('getaddrinfo') || orErr.message.includes('ENOTFOUND'))));
+        if (isNetworkErr) {
+          console.log('openrouter: network error detected, attempting fallback to other providers');
+          try {
+            // Prefer OpenAI fallback (simpler) if configured
+            const openaiKey = process.env.OPENAI_API_KEY || null;
+            if (openaiKey) {
+              console.log('openrouter: falling back to OpenAI');
+              const resp2 = await axios.post('https://api.openai.com/v1/chat/completions', {
+                model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt }
+                ],
+                temperature: 0.2,
+                max_tokens: 500
+              }, {
+                headers: { Authorization: `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+                timeout: 20000
+              });
+              answer = resp2?.data?.choices?.[0]?.message?.content || null;
+            } else if (process.env.GEMINI_API_KEY) {
+              // As a last resort, try Gemini if available
+              console.log('openrouter: falling back to Gemini');
+              const requestedModel = req.body?.model || req.query?.model || null;
+              const modelEnvRaw = requestedModel || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
+              const modelEnv = String(modelEnvRaw).toLowerCase();
+              const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
+              const urlBase = `https://generativelanguage.googleapis.com/v1/${modelPath}:generate`;
+              // try service-account token first
+              let resp3;
+              const saToken = await (async function getServiceAccountAccessToken(){
+                try {
+                  if (!GoogleAuth) return null;
+                  const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
+                  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+                    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+                    const auth = new GoogleAuth({ credentials: creds, scopes });
+                    const client = await auth.getClient();
+                    const at = await client.getAccessToken();
+                    return (typeof at === 'string') ? at : (at?.token || null);
+                  }
+                  if (process.env.GOOGLE_SERVICE_ACCOUNT_PATH) {
+                    const auth = new GoogleAuth({ keyFilename: process.env.GOOGLE_SERVICE_ACCOUNT_PATH, scopes });
+                    const client = await auth.getClient();
+                    const at = await client.getAccessToken();
+                    return (typeof at === 'string') ? at : (at?.token || null);
+                  }
+                  return null;
+                } catch (e) { return null; }
+              })();
+              if (saToken) {
+                resp3 = await axios.post(urlBase, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { headers: { Authorization: `Bearer ${saToken}`, 'Content-Type': 'application/json' }, timeout: 20000 });
+              } else {
+                resp3 = await axios.post(`${urlBase}?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`, { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 }, { timeout: 20000 });
+              }
+              answer = resp3?.data?.candidates?.[0]?.output || resp3?.data?.candidates?.[0]?.content || resp3?.data?.output || null;
+            }
+          } catch (fbErr) {
+            console.error('fallback error after OpenRouter failure', fbErr?.response?.data || fbErr.message || fbErr);
+            return res.status(500).json({ error: 'OpenRouter API error (and fallback failed)', detail: fbErr?.response?.data || fbErr.message });
+          }
+        }
+        // If not a network error or fallback didn't set answer, return original error
+        if (!answer) return res.status(500).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
       }
     } else if (provider === 'gemini' || provider === 'google') {
       // Use Google Generative Language API (Gemini).
