@@ -42,36 +42,12 @@ try { GoogleAuth = require('google-auth-library').GoogleAuth; } catch (e) { /* o
 const app = express();
 app.use(express.json());
 
-// Simplified and robust CORS setup
-const allowedOrigins = (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
-  .map(s => s.trim())
-  .filter(Boolean);
-
+// Allow all origins for development purposes.
+// For production, you should configure a specific list of allowed origins.
 app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-
-    // Dynamically add the origin to the list of allowed origins if it's a shopify domain
-    // This is safe because we validate the shop and HMAC for any sensitive endpoints.
-    if (/\.myshopify\.com$/.test(new URL(origin).hostname)) {
-      if (!allowedOrigins.includes(origin)) {
-        allowedOrigins.push(origin);
-      }
-    }
-    
-    if (allowedOrigins.length === 0) {
-        // Fallback to allowing any origin if none are specified.
-        // This is less secure but good for development.
-        // For production, you should set ALLOWED_ORIGINS in your .env file.
-        return callback(null, true);
-    }
-
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
+  origin: (origin, callback) => {
+    // This allows all origins.
+    callback(null, true);
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'X-Shop-Domain', 'X-Use-Stored', 'X-SAIA-Token', 'Authorization'],
