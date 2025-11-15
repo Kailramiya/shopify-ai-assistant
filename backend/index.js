@@ -41,28 +41,39 @@ try { GoogleAuth = require('google-auth-library').GoogleAuth; } catch (e) { /* o
 
 const app = express();
 app.use(express.json());
-// Dynamic CORS: allow requests from known shop origins or configured ALLOWED_ORIGINS
-const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean) : null;
+
+// Simplified and robust CORS setup
+const allowedOrigins = (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [])
+  .map(s => s.trim())
+  .filter(Boolean);
+
 app.use(cors({
-  origin: function(origin, callback) {
-    // allow non-browser clients (curl) with no origin
-    if (!origin) return callback(null, true);trac
-    try {
-      const originHost = new URL(origin).host;
-      // allow explicit allowlist
-      if (allowedOrigins && (allowedOrigins.includes(origin) || allowedOrigins.includes(originHost))) return callback(null, true);
-      // allow Shopify stores and dev previews (convenience) - accept any myshopify.com origin
-      if (originHost && originHost.endsWith('.myshopify.com')) return callback(null, true);
-      // allow if this origin maps to a stored shop
-      try {
-        const shopData = storage.readShopData(originHost);
-        if (shopData) return callback(null, true);
-      } catch (e) { /* ignore */ }
-    } catch (e) { /* invalid origin, fallthrough */ }
-    return callback(new Error('CORS blocked for origin: ' + origin));
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    // Dynamically add the origin to the list of allowed origins if it's a shopify domain
+    // This is safe because we validate the shop and HMAC for any sensitive endpoints.
+    if (/\.myshopify\.com$/.test(new URL(origin).hostname)) {
+      if (!allowedOrigins.includes(origin)) {
+        allowedOrigins.push(origin);
+      }
+    }
+    
+    if (allowedOrigins.length === 0) {
+        // Fallback to allowing any origin if none are specified.
+        // This is less secure but good for development.
+        // For production, you should set ALLOWED_ORIGINS in your .env file.
+        return callback(null, true);
+    }
+
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
   },
   credentials: true,
-  // allow widget to send X-Shop-Domain and other custom headers
   allowedHeaders: ['Content-Type', 'X-Shop-Domain', 'X-Use-Stored', 'X-SAIA-Token', 'Authorization'],
   exposedHeaders: ['Content-Type', 'X-Shop-Domain']
 }));
