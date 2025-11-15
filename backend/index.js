@@ -301,7 +301,8 @@ app.post("/api/ask", async (req, res) => {
     const providedApiKey = apiKey || null;
     const hasOpenRouter = !!(providedApiKey || process.env.OPENROUTER_API_KEY);
     const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_PATH);
-    let provider = req.body?.provider || process.env.AI_PROVIDER || (hasGemini ? 'gemini' : (hasOpenRouter ? 'openrouter' : null));
+    // User wants to default to a specific OpenRouter model, so we prioritize OpenRouter.
+    let provider = req.body?.provider || process.env.AI_PROVIDER || (hasOpenRouter ? 'openrouter' : (hasGemini ? 'gemini' : null));
     console.log('/api/ask: provider selection', { provider, hasGemini, hasOpenRouter, useStored });
 
     if (!provider) {
@@ -332,12 +333,33 @@ app.post("/api/ask", async (req, res) => {
     // Prefer Gemini (Google Generative) if available, otherwise OpenRouter
     if (provider === 'gemini') {
       try {
-        const requestedModel = req.body?.model || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'text-bison-001';
+        const requestedModel = req.body?.model || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'gemini-1.5-flash-latest';
         const modelEnv = String(requestedModel).toLowerCase();
+        
+        // Detect if it's a legacy PaLM model vs a newer Gemini model to adjust the API endpoint and body
+        const isLegacyPaLM = modelEnv.includes('bison') || modelEnv.includes('gecko') || modelEnv.includes('unicorn');
+        const apiAction = isLegacyPaLM ? 'generateText' : 'generateContent';
         const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
-        const urlBase = `https://generativelanguage.googleapis.com/v1/${modelPath}:generate`;
-        // prepare request body for Gemini
-        const geminiBody = { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 };
+        const apiVersion = isLegacyPaLM ? 'v1' : 'v1beta';
+        const urlBase = `https://generativelanguage.googleapis.com/${apiVersion}/${modelPath}:${apiAction}`;
+
+        let geminiBody;
+        if (isLegacyPaLM) {
+          // Legacy PaLM API body
+          geminiBody = { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 };
+        } else {
+          // Modern Gemini API body
+          geminiBody = {
+            contents: [{
+              role: "user",
+              parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }]
+            }],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 512,
+            }
+          };
+        }
 
         // Try service-account token first (preferred)
         let respGemini = null;
@@ -368,7 +390,11 @@ app.post("/api/ask", async (req, res) => {
           throw new Error('No Gemini credentials available');
         }
 
-        answer = respGemini?.data?.candidates?.[0]?.output || respGemini?.data?.candidates?.[0]?.content || respGemini?.data?.output || null;
+        if (isLegacyPaLM) {
+          answer = respGemini?.data?.candidates?.[0]?.output || null;
+        } else {
+          answer = respGemini?.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        }
       } catch (gErr) {
         console.error('gemini error', gErr?.response?.data || gErr.message || gErr);
         // If Gemini had a network/DNS error and OpenRouter is available, try OpenRouter as fallback
