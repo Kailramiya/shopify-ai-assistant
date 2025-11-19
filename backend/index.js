@@ -266,7 +266,7 @@ app.get('/widget/chat-widget.js', (req, res) => {
 
 app.post("/api/ask", async (req, res) => {
   try {
-    const { question, url, apiKey } = req.body || {};
+    const { question, url } = req.body || {};
     console.log('API ask received', { question: question ? question.slice(0,30) : null, url });
     if (!question || typeof question !== 'string') return res.status(400).json({ error: 'question is required' });
 
@@ -330,7 +330,7 @@ app.post("/api/ask", async (req, res) => {
       const baseOpenRouterUrl = 'https://openrouter.ai/api/v1/chat/completions';
       const openrouterUrl = (process.env.OPENROUTER_RELAY_PREFIX || '') + baseOpenRouterUrl;
       console.log('openrouter: using URL', openrouterUrl);
-      const routerKey = providedApiKey || process.env.OPENROUTER_API_KEY;
+      const routerKey =  process.env.OPENROUTER_API_KEY;
       const resp = await axios.post(openrouterUrl, {
         model,
         messages: [
