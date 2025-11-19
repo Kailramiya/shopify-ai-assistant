@@ -35,10 +35,6 @@ if (process.env.FORCE_DNS === '1' || process.env.FORCE_DNS === 'true') {
   }
 }
 
-// Optional Google auth library for service-account OAuth (used for Gemini access)
-let GoogleAuth = null;
-try { GoogleAuth = require('google-auth-library').GoogleAuth; } catch (e) { /* optional */ }
-
 const app = express();
 app.use(express.json());
 
@@ -297,15 +293,12 @@ app.post("/api/ask", async (req, res) => {
       } catch (e) { console.error('live scrape error', e); }
     }
 
-  // Determine available providers and keys
+    // Determine available providers and keys
     const providedApiKey = apiKey || null;
     const hasOpenRouter = !!(providedApiKey || process.env.OPENROUTER_API_KEY);
-    const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_PATH);
-    // User wants to default to a specific OpenRouter model, so we prioritize OpenRouter.
-    let provider = req.body?.provider || process.env.AI_PROVIDER || (hasOpenRouter ? 'openrouter' : (hasGemini ? 'gemini' : null));
-    console.log('/api/ask: provider selection', { provider, hasGemini, hasOpenRouter, useStored });
+    console.log('/api/ask: using OpenRouter', { keyPresent: hasOpenRouter, useStored });
 
-    if (!provider) {
+    if (!hasOpenRouter) {
       // Fallback: basic keyword match against scraped text
       if (contextText) {
         const qWords = question.toLowerCase().split(/\W+/).filter(Boolean);
@@ -319,7 +312,7 @@ app.post("/api/ask", async (req, res) => {
         }
         if (best.score > 0) return res.json({ answer: `From the site: ${best.sent}` });
       }
-      return res.json({ answer: 'No AI provider configured. Set GEMINI or OPENROUTER credentials in server env, or send apiKey in the request.' });
+      return res.json({ answer: 'No AI provider configured. Set OPENROUTER_API_KEY in server env, or send apiKey in the request.' });
     }
 
     // Build prompt for LLM using any scraped context (truncate to safe size)
@@ -330,138 +323,35 @@ app.post("/api/ask", async (req, res) => {
 
     let answer = null;
 
-    // Prefer Gemini (Google Generative) if available, otherwise OpenRouter
-    if (provider === 'gemini') {
-      try {
-        const requestedModel = req.body?.model || process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || 'gemini-1.5-flash-latest';
-        const modelEnv = String(requestedModel).toLowerCase();
-        
-        // Detect if it's a legacy PaLM model vs a newer Gemini model to adjust the API endpoint and body
-        const isLegacyPaLM = modelEnv.includes('bison') || modelEnv.includes('gecko') || modelEnv.includes('unicorn');
-        const apiAction = isLegacyPaLM ? 'generateText' : 'generateContent';
-        const modelPath = modelEnv.startsWith('models/') ? modelEnv : `models/${modelEnv}`;
-        const apiVersion = isLegacyPaLM ? 'v1' : 'v1beta';
-        const urlBase = `https://generativelanguage.googleapis.com/${apiVersion}/${modelPath}:${apiAction}`;
-
-        let geminiBody;
-        if (isLegacyPaLM) {
-          // Legacy PaLM API body
-          geminiBody = { prompt: { text: `${systemPrompt}\n\n${userPrompt}` }, temperature: 0.2, maxOutputTokens: 512 };
-        } else {
-          // Modern Gemini API body
-          geminiBody = {
-            contents: [{
-              role: "user",
-              parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }]
-            }],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 512,
-            }
-          };
-        }
-
-        // Try service-account token first (preferred)
-        let respGemini = null;
-        let saToken = null;
-        try {
-          if (GoogleAuth) {
-            const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
-            if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-              const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-              const auth = new GoogleAuth({ credentials: creds, scopes });
-              const client = await auth.getClient();
-              const at = await client.getAccessToken();
-              saToken = (typeof at === 'string') ? at : (at?.token || null);
-            } else if (process.env.GOOGLE_SERVICE_ACCOUNT_PATH) {
-              const auth = new GoogleAuth({ keyFilename: process.env.GOOGLE_SERVICE_ACCOUNT_PATH, scopes });
-              const client = await auth.getClient();
-              const at = await client.getAccessToken();
-              saToken = (typeof at === 'string') ? at : (at?.token || null);
-            }
-          }
-        } catch (e) { saToken = null; }
-
-        if (saToken) {
-          respGemini = await axios.post(urlBase, geminiBody, { headers: { Authorization: `Bearer ${saToken}`, 'Content-Type': 'application/json' }, timeout: 20000 });
-        } else if (process.env.GEMINI_API_KEY) {
-          respGemini = await axios.post(`${urlBase}?key=${encodeURIComponent(process.env.GEMINI_API_KEY)}`, geminiBody, { timeout: 20000 });
-        } else {
-          throw new Error('No Gemini credentials available');
-        }
-
-        if (isLegacyPaLM) {
-          answer = respGemini?.data?.candidates?.[0]?.output || null;
-        } else {
-          answer = respGemini?.data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
-        }
-      } catch (gErr) {
-        console.error('gemini error', gErr?.response?.data || gErr.message || gErr);
-        // If Gemini had a network/DNS error and OpenRouter is available, try OpenRouter as fallback
-        const netCodes = ['ENOTFOUND','ECONNREFUSED','ENETUNREACH','EAI_AGAIN'];
-        const isNetworkErr = gErr && (netCodes.includes(gErr.code) || (gErr.message && (gErr.message.includes('getaddrinfo') || gErr.message.includes('ENOTFOUND'))));
-        if (isNetworkErr && (process.env.OPENROUTER_API_KEY || providedApiKey)) {
-          console.log('gemini: network error detected, falling back to OpenRouter');
-          // perform OpenRouter call
-          try {
-            const model = req.body?.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
-            const baseOpenRouterUrl = 'https://api.openrouter.ai/v1/chat/completions';
-            const openrouterUrl = (process.env.OPENROUTER_RELAY_PREFIX || '') + baseOpenRouterUrl;
-            const routerKey = providedApiKey || process.env.OPENROUTER_API_KEY;
-            const resp = await axios.post(openrouterUrl, {
-              model,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt }
-              ],
-              temperature: 0.2,
-              max_tokens: 500
-            }, {
-              headers: { Authorization: `Bearer ${routerKey}`, 'Content-Type': 'application/json' },
-              httpsAgent: defaultHttpsAgent,
-              timeout: 20000
-            });
-            answer = resp?.data?.choices?.[0]?.message?.content || resp?.data?.choices?.[0]?.message || resp?.data?.choices?.[0]?.text || null;
-            if (typeof answer === 'object' && answer?.length) answer = Array.isArray(answer) ? answer.map(a => a?.text || a).join('\n') : (answer?.text || JSON.stringify(answer));
-          } catch (orErr) {
-            console.error('openrouter fallback error', orErr?.response?.data || orErr.message || orErr);
-            return res.status(502).json({ error: 'Gemini failed and OpenRouter fallback failed', detail: orErr?.response?.data || orErr.message });
-          }
-        } else {
-          return res.status(502).json({ error: 'Gemini API error', detail: gErr?.response?.data || gErr.message });
-        }
-      }
-    } else {
-      // OpenRouter primary branch
-      try {
-        const model = req.body?.model || process.env.OPENROUTER_MODEL || 'gpt-4o-mini';
-        console.log('openrouter: request model=', model);
-        const baseOpenRouterUrl = 'https://api.openrouter.ai/v1/chat/completions';
-        const openrouterUrl = (process.env.OPENROUTER_RELAY_PREFIX || '') + baseOpenRouterUrl;
-        console.log('openrouter: using URL', openrouterUrl);
-        const routerKey = providedApiKey || process.env.OPENROUTER_API_KEY;
-        const resp = await axios.post(openrouterUrl, {
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ],
-          temperature: 0.2,
-          max_tokens: 500
-        }, {
-          headers: { Authorization: `Bearer ${routerKey}`, 'Content-Type': 'application/json' },
-          httpsAgent: defaultHttpsAgent,
-          timeout: 20000
-        });
-        answer = resp?.data?.choices?.[0]?.message?.content || resp?.data?.choices?.[0]?.message || resp?.data?.choices?.[0]?.text || null;
-        if (typeof answer === 'object' && answer?.length) answer = Array.isArray(answer) ? answer.map(a => a?.text || a).join('\n') : (answer?.text || JSON.stringify(answer));
-      } catch (orErr) {
-        console.error('openrouter error', orErr?.response?.data || orErr.message || orErr);
-        return res.status(502).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
-      }
+    // OpenRouter primary branch
+    try {
+      const model = req.body?.model || process.env.OPENROUTER_MODEL || 'google/gemini-flash-1.5';
+      console.log('openrouter: request model=', model);
+      const baseOpenRouterUrl = 'https://openrouter.ai/api/v1/chat/completions';
+      const openrouterUrl = (process.env.OPENROUTER_RELAY_PREFIX || '') + baseOpenRouterUrl;
+      console.log('openrouter: using URL', openrouterUrl);
+      const routerKey = providedApiKey || process.env.OPENROUTER_API_KEY;
+      const resp = await axios.post(openrouterUrl, {
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.2,
+        max_tokens: 500
+      }, {
+        headers: { Authorization: `Bearer ${routerKey}`, 'Content-Type': 'application/json' },
+        httpsAgent: defaultHttpsAgent,
+        timeout: 20000
+      });
+      answer = resp?.data?.choices?.[0]?.message?.content || resp?.data?.choices?.[0]?.message || resp?.data?.choices?.[0]?.text || null;
+      if (typeof answer === 'object' && answer?.length) answer = Array.isArray(answer) ? answer.map(a => a?.text || a).join('\n') : (answer?.text || JSON.stringify(answer));
+    } catch (orErr) {
+      console.error('openrouter error', orErr?.response?.data || orErr.message || orErr);
+      return res.status(502).json({ error: 'OpenRouter API error', detail: orErr?.response?.data || orErr.message });
     }
-    // Only OpenRouter provider is supported in this deployment. Other providers removed.
-  if (!answer) return res.status(500).json({ error: 'No answer from AI provider', raw: (typeof resp !== 'undefined' ? resp.data : null) });
+    
+    if (!answer) return res.status(500).json({ error: 'No answer from AI provider' });
     return res.json({ answer });
   } catch (err) {
     console.error('ask error', err?.response?.data || err.message || err);
@@ -539,10 +429,8 @@ app.get('/api/debug-provider', (req, res) => {
   try {
     const hasOpenRouter = !!process.env.OPENROUTER_API_KEY;
     const openrouterModel = process.env.OPENROUTER_MODEL || null;
-    const hasGemini = !!(process.env.GEMINI_API_KEY || process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_SERVICE_ACCOUNT_PATH);
-    const geminiModel = process.env.GEMINI_MODEL || process.env.GOOGLE_MODEL || null;
-    const providerDefault = process.env.AI_PROVIDER || (hasGemini ? 'gemini' : (hasOpenRouter ? 'openrouter' : null));
-    return res.json({ providerDefault, hasOpenRouter, hasGemini, openrouterModel, geminiModel });
+    const providerDefault = process.env.AI_PROVIDER || (hasOpenRouter ? 'openrouter' : null);
+    return res.json({ providerDefault, hasOpenRouter, openrouterModel });
   } catch (e) {
     return res.status(500).json({ error: 'debug error', detail: e.message });
   }
